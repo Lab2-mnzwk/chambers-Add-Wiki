@@ -13,11 +13,15 @@ from google.oauth2.service_account import Credentials
 from gspread.exceptions import APIError
 from gspread.utils import ValueInputOption
 
+from sheet_store import SheetStore, default_cache_path
+
 SPREADSHEET_ID = "1jGba1Vnzjlvf6dNj6hqVRYoPEkcJVkeU1dND-vnThrY"
 SERVICE_ACCOUNT_FILE = ".streamlit/service_account.json"
 SHEET_NAME = "wiki付与作業シート（第一弾）"
 ASSIGN_SHEET_NAME = "アサイン"
 DISCORD_NAME_COLUMN = "discord名"
+ASSIGN_NAMES_CACHE_TTL = 3600
+SESSION_DISCORD_NAMES_KEY = "_discord_names_cache"
 
 COL_STATUS_WORK = "Status.1"
 COL_ASSIGNEE = "Assignee"
@@ -48,6 +52,8 @@ WORK_STATUS_COL_LETTER = "FG"
 WORK_ASSIGNEE_COL_LETTER = "FH"
 DEFAULT_INDEX_ROWS = 10000
 ROW_CACHE_PREFIX = "row_data_"
+# サーバー内 SQLite キャッシュ（同一ワーカー上の全ユーザーで Sheets 読取を共有）
+USE_SERVER_CACHE = True
 INLINE_COL_MIN_PX = 128
 INLINE_LEADING_MIN_PX = 86
 NAV_CONTROL_FONT_PX = 16
@@ -282,22 +288,32 @@ st.title("Wiki付与 行作業ビュー")
 def get_client():
     """ローカル: JSON ファイル / Cloud: st.secrets[gcp_service_account]。"""
     credentials = None
+    secrets_error: str | None = None
     try:
         if "gcp_service_account" in st.secrets:
             credentials = Credentials.from_service_account_info(
                 dict(st.secrets["gcp_service_account"]),
                 scopes=SCOPES,
             )
-    except (FileNotFoundError, KeyError):
+    except FileNotFoundError:
+        credentials = None
+    except Exception as exc:
+        secrets_error = str(exc)
         credentials = None
 
     if credentials is None:
         json_path = Path(SERVICE_ACCOUNT_FILE)
         if not json_path.exists():
+            hint = (
+                "Streamlit Cloud: アプリ管理 → Settings → Secrets に "
+                "`secrets.toml.example` と同じ TOML 形式で `[gcp_service_account]` を貼り付け、"
+                "Save 後に Reboot app してください。"
+                "（JSON をそのまま貼ると動きません）"
+            )
+            if secrets_error:
+                hint = f"Secrets の読み込みに失敗しました: {secrets_error}\n\n{hint}"
             raise FileNotFoundError(
-                f"{SERVICE_ACCOUNT_FILE} が見つかりません。"
-                "ローカルでは JSON を .streamlit/ に置くか、"
-                "Streamlit Cloud では Secrets に [gcp_service_account] を設定してください。"
+                f"{SERVICE_ACCOUNT_FILE} が見つかりません。\n\n{hint}"
             )
         credentials = Credentials.from_service_account_file(
             SERVICE_ACCOUNT_FILE,
@@ -305,6 +321,11 @@ def get_client():
         )
 
     return gspread.authorize(credentials)
+
+
+@st.cache_resource
+def get_sheet_store() -> SheetStore:
+    return SheetStore(default_cache_path(SPREADSHEET_ID))
 
 
 def make_unique_headers(headers: list[str]) -> list[str]:
@@ -682,24 +703,12 @@ def column_range_for_rows(
     return f"{letter}{start_row}:{letter}{end_row}"
 
 
-@st.cache_data(ttl=600)
-def load_sheet_structure():
-    """ヘッダー行のみ取得（1 read）。"""
-    sheet = get_read_worksheet()
-    raw_headers = sheet.row_values(1)
-    unique_headers = make_unique_headers(raw_headers)
-    return sheet.spreadsheet.title, raw_headers, unique_headers, sheet.col_count
-
-
-@st.cache_data(ttl=300)
-def load_queue_index(
+def fetch_queue_index_from_sheets(
     index_rows: int,
-    raw_headers_key: tuple[str, ...],
-    unique_headers_key: tuple[str, ...],
+    raw_headers: list[str],
+    unique_headers: list[str],
 ) -> pd.DataFrame:
     """Assignee / Status / 連番 だけ読んでキュー判定用インデックスを作る（1 batch_get）。"""
-    raw_headers = list(raw_headers_key)
-    unique_headers = list(unique_headers_key)
     sheet = get_read_worksheet()
     start_row = 2
     end_row = index_rows + 1
@@ -743,13 +752,45 @@ def load_queue_index(
     return pd.DataFrame(records)
 
 
-@st.cache_data(ttl=300)
-def fetch_sheet_row(
+def load_sheet_structure():
+    """ヘッダー行のみ取得（初回1 read、以降はサーバー内キャッシュ）。"""
+    if USE_SERVER_CACHE:
+        store = get_sheet_store()
+        cached = store.get_structure()
+        if cached is not None:
+            return cached
+
+    sheet = get_read_worksheet()
+    raw_headers = sheet.row_values(1)
+    unique_headers = make_unique_headers(raw_headers)
+    result = sheet.spreadsheet.title, raw_headers, unique_headers, sheet.col_count
+    if USE_SERVER_CACHE:
+        get_sheet_store().set_structure(*result)
+    return result
+
+
+def load_queue_index(
+    index_rows: int,
+    raw_headers: list[str],
+    unique_headers: list[str],
+) -> pd.DataFrame:
+    if USE_SERVER_CACHE:
+        store = get_sheet_store()
+        if store.has_queue_index(index_rows):
+            return store.load_queue_index(COL_STATUS_WORK, COL_ASSIGNEE)
+
+    index_df = fetch_queue_index_from_sheets(index_rows, raw_headers, unique_headers)
+    if USE_SERVER_CACHE:
+        get_sheet_store().save_queue_index(
+            index_df, index_rows, COL_STATUS_WORK, COL_ASSIGNEE
+        )
+    return index_df
+
+
+def fetch_sheet_row_from_api(
     sheet_row_number: int,
     col_count: int,
-    raw_headers_key: tuple[str, ...],
 ) -> list[str]:
-    """表示中の1行だけ取得（行ごとに初回1 read、以降は cache）。"""
     sheet = get_read_worksheet()
     start = gspread.utils.rowcol_to_a1(sheet_row_number, 1)
     end = gspread.utils.rowcol_to_a1(sheet_row_number, col_count)
@@ -757,6 +798,24 @@ def fetch_sheet_row(
     if not values:
         return []
     return values[0]
+
+
+def fetch_sheet_row(
+    sheet_row_number: int,
+    col_count: int,
+    unique_headers: list[str],
+) -> list[str]:
+    """表示中の1行だけ取得（初回1 read/行、以降はサーバー内キャッシュ）。"""
+    if USE_SERVER_CACHE:
+        store = get_sheet_store()
+        cached = store.get_row_values(sheet_row_number)
+        if cached is not None:
+            return cached
+
+    row_values = fetch_sheet_row_from_api(sheet_row_number, col_count)
+    if USE_SERVER_CACHE:
+        get_sheet_store().save_row_values(sheet_row_number, row_values)
+    return row_values
 
 
 def row_cache_key(sheet_row_number: int) -> str:
@@ -768,10 +827,12 @@ def ensure_queue_index(
     raw_headers: list[str],
     unique_headers: list[str],
 ) -> pd.DataFrame:
-    if "queue_index_df" in st.session_state:
+    session_rows = st.session_state.get("_queue_index_rows")
+    if "queue_index_df" in st.session_state and session_rows == index_rows:
         return st.session_state["queue_index_df"]
-    index_df = load_queue_index(index_rows, tuple(raw_headers), tuple(unique_headers))
+    index_df = load_queue_index(index_rows, raw_headers, unique_headers)
     st.session_state["queue_index_df"] = index_df
+    st.session_state["_queue_index_rows"] = index_rows
     return index_df
 
 
@@ -784,7 +845,7 @@ def get_cached_row(
     key = row_cache_key(sheet_row_number)
     if key in st.session_state:
         return st.session_state[key]
-    row_values = fetch_sheet_row(sheet_row_number, col_count, tuple(raw_headers))
+    row_values = fetch_sheet_row(sheet_row_number, col_count, unique_headers)
     series = build_row_series(sheet_row_number, raw_headers, unique_headers, row_values)
     st.session_state[key] = series
     return series
@@ -816,17 +877,21 @@ def patch_queue_index(plan: pd.DataFrame) -> None:
         mask = index_df["_sheet_row_number"] == sheet_row
         if mask.any():
             index_df.loc[mask, col_name] = item["書き込み値"]
+    if USE_SERVER_CACHE:
+        get_sheet_store().patch_queue_index(plan, COL_STATUS_WORK, COL_ASSIGNEE)
 
 
 def clear_all_data_cache() -> None:
-    load_sheet_structure.clear()
-    load_queue_index.clear()
-    fetch_sheet_row.clear()
+    if USE_SERVER_CACHE:
+        get_sheet_store().clear_all()
+    load_assign_discord_names.clear()
     for key in list(st.session_state.keys()):
         if not isinstance(key, str):
             continue
         if key == "queue_index_df" or key.startswith(ROW_CACHE_PREFIX):
             del st.session_state[key]
+    st.session_state.pop("_queue_index_rows", None)
+    st.session_state.pop(SESSION_DISCORD_NAMES_KEY, None)
 
 
 def collect_inline_updates(
@@ -973,6 +1038,8 @@ def save_current_row(
     clear_row_edit_state(sheet_row_number)
     patch_row_cache(sheet_row_number, plan)
     patch_queue_index(plan)
+    if USE_SERVER_CACHE:
+        get_sheet_store().patch_row_values(sheet_row_number, unique_headers, plan)
     st.session_state.pending_advance = True
     return True
 
@@ -1535,31 +1602,45 @@ def filter_queue(df: pd.DataFrame, worker: str, mode: str, skip_done: bool) -> p
     return queued
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=ASSIGN_NAMES_CACHE_TTL, show_spinner=False)
 def load_assign_discord_names() -> list[str]:
+    """アサインシートの Discord 名一覧（ヘッダー1行 + 対象列のみ読取、1時間キャッシュ）。"""
     client = get_client()
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
     sheet = spreadsheet.worksheet(ASSIGN_SHEET_NAME)
-    values = sheet.get_all_values()
 
-    if not values:
+    headers = sheet.row_values(1)
+    if not headers or DISCORD_NAME_COLUMN not in headers:
         return []
 
-    headers = values[0]
-    if DISCORD_NAME_COLUMN not in headers:
-        return []
-
-    col_index = headers.index(DISCORD_NAME_COLUMN)
+    col_index = headers.index(DISCORD_NAME_COLUMN) + 1
+    col_cells = sheet.col_values(col_index)
     names: list[str] = []
-
-    for row in values[1:]:
-        if col_index >= len(row):
-            continue
-        name = str(row[col_index]).strip()
+    for cell in col_cells[1:]:
+        name = str(cell).strip()
         if name and name not in names:
             names.append(name)
-
     return names
+
+
+def load_assign_discord_names_safe() -> list[str]:
+    """429 時は session 内の前回結果にフォールバック。"""
+    try:
+        names = load_assign_discord_names()
+        st.session_state[SESSION_DISCORD_NAMES_KEY] = names
+        return names
+    except APIError as e:
+        if "429" not in str(e):
+            raise
+        fallback = st.session_state.get(SESSION_DISCORD_NAMES_KEY)
+        if fallback is not None:
+            st.sidebar.warning(
+                "Discord 名一覧の読み取り制限中です。前回取得分を表示しています。"
+                "1〜2分後に「再読み込み」を試してください。"
+            )
+            return list(fallback)
+        st.error("読み取り制限中。少し待って再試行してください。")
+        st.stop()
 
 
 def render_worker_selector(discord_names: list[str]) -> str:
@@ -1583,7 +1664,7 @@ def render_worker_selector(discord_names: list[str]) -> str:
 
 try:
     st.markdown(WORK_TABLE_CSS, unsafe_allow_html=True)
-    discord_names = load_assign_discord_names()
+    discord_names = load_assign_discord_names_safe()
 
     with st.sidebar:
         st.subheader("作業設定")
@@ -1615,7 +1696,16 @@ try:
             f"書き込み先: `{WRITE_TARGET_SHEET_NAME}` / "
             f"ENABLE={ENABLE_SHEET_WRITES} / PROD={ALLOW_PRODUCTION_WRITES}"
         )
-        st.caption("読取: 初回インデックス2回 + 表示行は初回のみ1回/行")
+        if USE_SERVER_CACHE:
+            stats = get_sheet_store().cache_stats()
+            st.caption(
+                "読取: サーバー内キャッシュ（SQLite）。"
+                f"インデックス {stats['index_rows_cached']} 行 / "
+                f"行データ {stats['data_rows_cached']} 行を保持。"
+                " Sheets API は初回同期・保存・「再読み込み」時のみ。"
+            )
+        else:
+            st.caption("読取: 都度 Sheets API")
 
         if st.button("先頭からやり直す"):
             for key in ("row_history", "history_index", "_nav_filter_key"):
