@@ -187,14 +187,27 @@ export function resolveWorkStatusUnique(
   uniqueHeaders: string[]
 ): string | null {
   for (let i = 0; i < rawHeaders.length; i++) {
-    if (
-      columnLetter(i + 1) === WORK_STATUS_COL_LETTER &&
-      rawHeaders[i] === "Status"
-    ) {
+    if (isWorkStatusColumn(rawHeaders[i], i + 1)) {
       return uniqueHeaders[i];
     }
   }
   return uniqueHeaders.includes(COL_STATUS_WORK) ? COL_STATUS_WORK : null;
+}
+
+/** FH列の Assignee（unique 名は Assignee または Assignee.1 など） */
+export function resolveWorkAssigneeUnique(
+  rawHeaders: string[],
+  uniqueHeaders: string[]
+): string | null {
+  for (let i = 0; i < rawHeaders.length; i++) {
+    if (
+      columnLetter(i + 1) === WORK_ASSIGNEE_COL_LETTER &&
+      rawHeaders[i] === COL_ASSIGNEE
+    ) {
+      return uniqueHeaders[i];
+    }
+  }
+  return uniqueHeaders.includes(COL_ASSIGNEE) ? COL_ASSIGNEE : null;
 }
 
 export function effectiveColCount(colCount: number, uniqueHeaders: string[]): number {

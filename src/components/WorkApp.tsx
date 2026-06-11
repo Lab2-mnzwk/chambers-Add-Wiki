@@ -15,7 +15,7 @@ const PREFS_KEY = "wikiWorkNext";
 
 const defaultOptions: WorkOptions = {
   worker: "",
-  queueFilter: "未担当＋自分担当",
+  queueFilter: "自分担当",
   skipDone: true,
   lightBlueOnly: true,
   showEmptyFromAc: false,
@@ -167,9 +167,28 @@ export function WorkApp() {
   }, [loadPrefs]);
 
   useEffect(() => {
+    if (!bootstrap?.discordNames.length) return;
+    setOptions((prev) => {
+      if (prev.worker && bootstrap.discordNames.includes(prev.worker)) {
+        return prev;
+      }
+      const next = { ...prev, worker: bootstrap.discordNames[0] };
+      savePrefs(next);
+      return next;
+    });
+  }, [bootstrap, savePrefs]);
+
+  useEffect(() => {
     if (!bootstrap) return;
+    if (
+      !options.worker &&
+      (options.queueFilter === "自分担当" ||
+        options.queueFilter === "未担当＋自分担当")
+    ) {
+      return;
+    }
     savePrefs(options);
-    loadQueue(options, true).catch((e) => setMessage(String(e), "error"));
+    loadQueue(options, false).catch((e) => setMessage(String(e), "error"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     bootstrap,
@@ -396,11 +415,21 @@ export function WorkApp() {
         </aside>
 
         <main className={styles.main}>
-          {!queueRows.length && bootstrap && (
+          {!queueRows.length && bootstrap && options.worker && (
             <div className={styles.empty}>
               条件に一致する行がありません。フィルタを変更してください。
             </div>
           )}
+
+          {!queueRows.length &&
+            bootstrap &&
+            !options.worker &&
+            options.queueFilter !== "すべて" &&
+            options.queueFilter !== "未担当" && (
+              <div className={styles.empty}>
+                作業者名を選択してください。
+              </div>
+            )}
 
           {rowPayload && (
             <>

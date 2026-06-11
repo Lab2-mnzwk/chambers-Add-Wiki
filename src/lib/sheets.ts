@@ -13,6 +13,7 @@ import {
   columnLetter,
   effectiveColCount,
   makeUniqueHeaders,
+  resolveWorkAssigneeUnique,
   resolveWorkStatusUnique,
 } from "./columns";
 import type { SheetStructure } from "./types";
@@ -121,12 +122,14 @@ export async function fetchQueueIndex(
   const { rawHeaders, uniqueHeaders } = structure;
   const statusUnique =
     resolveWorkStatusUnique(rawHeaders, uniqueHeaders) ?? COL_STATUS_WORK;
+  const assigneeUnique =
+    resolveWorkAssigneeUnique(rawHeaders, uniqueHeaders) ?? COL_ASSIGNEE;
   const startRow = 2;
   const endRow = indexRows + 1;
 
   const ranges: string[] = [];
   const keys: string[] = [];
-  for (const headerName of ["連番", statusUnique, COL_ASSIGNEE]) {
+  for (const headerName of ["連番", statusUnique, assigneeUnique]) {
     const idx = uniqueHeaders.indexOf(headerName);
     if (idx < 0) continue;
     const letter = columnLetter(idx + 1);
@@ -160,7 +163,7 @@ export async function fetchQueueIndex(
       sheetRowNumber: startRow + i,
       renban: colData["連番"]?.[i] ?? "",
       status: colData[statusUnique]?.[i] ?? "",
-      assignee: colData[COL_ASSIGNEE]?.[i] ?? "",
+      assignee: colData[assigneeUnique]?.[i] ?? "",
     });
   }
   return records;

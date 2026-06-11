@@ -6,7 +6,7 @@ function parseOptions(searchParams: URLSearchParams): WorkOptions {
   return {
     worker: searchParams.get("worker") ?? "",
     queueFilter: (searchParams.get("queueFilter") ??
-      "未担当＋自分担当") as WorkOptions["queueFilter"],
+      "自分担当") as WorkOptions["queueFilter"],
     skipDone: searchParams.get("skipDone") !== "false",
     lightBlueOnly: searchParams.get("lightBlueOnly") !== "false",
     showEmptyFromAc: searchParams.get("showEmptyFromAc") === "true",
