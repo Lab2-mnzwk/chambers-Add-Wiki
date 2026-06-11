@@ -1,3 +1,5 @@
+"""Wiki付与 行作業 — Streamlit 版（旧）。本番は nextjs/ を使用。"""
+
 import json
 import re
 from html import escape, unescape
@@ -202,6 +204,7 @@ function scheduleInlineSync() {
 document.querySelectorAll("[data-inline-key]").forEach((el) => {
   if (el.tagName === "SELECT") {
     el.addEventListener("change", syncInlineValues);
+    el.addEventListener("blur", syncInlineValues);
   } else {
     el.addEventListener("blur", syncInlineValues);
     el.addEventListener("input", scheduleInlineSync);
@@ -251,6 +254,108 @@ def build_light_blue_work_headers() -> frozenset[str]:
 
 LIGHT_BLUE_WORK_HEADERS = build_light_blue_work_headers()
 
+MEMO_WORK_HEADERS = (
+    "Agent_memo",
+    "Place_memo",
+    "Patient-Theme_memo",
+    "Territory_memo",
+)
+
+MEMO_SECTION_BY_HEADER = {
+    "Agent_memo": "Agent",
+    "Place_memo": "Place",
+    "Patient-Theme_memo": "Patient-Theme",
+    "Territory_memo": "Territory",
+}
+
+COMPONENT_INLINE_SNAPSHOT_KEY = "_component_inline_snapshot"
+PENDING_SAVE_ROW_KEY = "_pending_save_row"
+FLUSH_NONCE_KEY = "_flush_nonce"
+LAST_COMPONENT_FLUSH_KEY = "_last_component_flush"
+
+
+def is_memo_work_column(raw_header: str) -> bool:
+    return raw_header in MEMO_WORK_HEADERS or raw_header.endswith("_memo")
+
+
+def is_work_status_column(raw_header: str, col_index: int) -> bool:
+    return (
+        column_letter(col_index) == WORK_STATUS_COL_LETTER and raw_header == "Status"
+    )
+
+
+def resolve_work_status_unique(
+    raw_headers: list[str], unique_headers: list[str]
+) -> str | None:
+    """FG列の作業用 Status（unique 名は Status または Status.1 など）。"""
+    for i, raw in enumerate(raw_headers):
+        if is_work_status_column(raw, i + 1):
+            return unique_headers[i]
+    return None
+
+
+def section_for_work_raw_header(raw_header: str) -> str | None:
+    if raw_header.startswith("Pl_"):
+        return "Place"
+    if raw_header.startswith("P-T_"):
+        return "Patient-Theme"
+    if raw_header.startswith("Te_"):
+        return "Territory"
+    if (
+        raw_header.startswith("A_name")
+        or raw_header.startswith("A_Wiki")
+        or raw_header.startswith("A_正しいwiki")
+        or raw_header in {f"A_{i}" for i in range(6, 9)}
+    ):
+        return "Agent"
+    return None
+
+
+def active_work_sections(
+    work_cols: list[str],
+    raw_headers: list[str],
+    unique_headers: list[str],
+) -> set[str]:
+    header_by_unique = dict(zip(unique_headers, raw_headers))
+    sections: set[str] = set()
+    for col_name in work_cols:
+        raw_header = header_by_unique.get(col_name, col_name)
+        if is_memo_work_column(raw_header):
+            continue
+        section = section_for_work_raw_header(raw_header)
+        if section:
+            sections.add(section)
+    return sections
+
+
+def should_show_memo_column(raw_header: str, active_sections: set[str]) -> bool:
+    """各 memo は、対応する作業列（A_name 等）が表示対象のときだけ出す。"""
+    section = MEMO_SECTION_BY_HEADER.get(raw_header)
+    if section is None:
+        return False
+    return section in active_sections
+
+
+def filter_memo_display_columns(
+    work_cols: list[str],
+    raw_headers: list[str],
+    unique_headers: list[str],
+) -> list[str]:
+    header_by_unique = dict(zip(unique_headers, raw_headers))
+    non_memo = [
+        col
+        for col in work_cols
+        if not is_memo_work_column(header_by_unique.get(col, col))
+    ]
+    active = active_work_sections(non_memo, raw_headers, unique_headers)
+    filtered: list[str] = list(non_memo)
+    for raw_header, unique_name in zip(raw_headers, unique_headers):
+        if not is_memo_work_column(raw_header):
+            continue
+        if should_show_memo_column(raw_header, active) and unique_name not in filtered:
+            filtered.append(unique_name)
+    return [name for name in unique_headers if name in set(filtered)]
+
 
 def build_wiki_triplet_rules() -> list[tuple[str, str, str]]:
     """名称列と Wiki 列の両方に値があるとき、正しいwiki 列も表示する。"""
@@ -282,6 +387,11 @@ SCOPES = [
 
 st.set_page_config(page_title="Wiki付与 行作業", layout="wide")
 st.title("Wiki付与 行作業ビュー")
+
+WORK_ROW_COMPONENT = components.declare_component(
+    "work_row_component",
+    path=str(Path(__file__).parent / "components" / "work_row"),
+)
 
 
 @st.cache_resource
@@ -349,12 +459,34 @@ def column_letter(col_index: int) -> str:
     return gspread.utils.rowcol_to_a1(1, col_index)[:-1]
 
 
+def column_index_from_letter(letter: str) -> int:
+    return gspread.utils.a1_to_rowcol(f"{letter}1")[1]
+
+
+def effective_col_count(col_count: int, unique_headers: list[str]) -> int:
+    """FG/FH まで必ず読める列数（キャッシュされた col_count が古い場合の保険）。"""
+    required = max(col_count, len(unique_headers))
+    for letter in (WORK_STATUS_COL_LETTER, WORK_ASSIGNEE_COL_LETTER):
+        required = max(required, column_index_from_letter(letter))
+    return required
+
+
 def is_cell_empty(value) -> bool:
     if value is None:
         return True
     if isinstance(value, float) and pd.isna(value):
         return True
     return str(value).strip() == ""
+
+
+def normalize_work_status(value) -> str:
+    """FG列 Status を表示・保存用の3択に正規化。"""
+    if is_cell_empty(value):
+        return STATUS_NOT_STARTED
+    val_str = str(value).strip()
+    if val_str in WORK_STATUS_OPTIONS:
+        return val_str
+    return STATUS_NOT_STARTED
 
 
 def is_wiki_dash(value) -> bool:
@@ -513,7 +645,13 @@ def work_display_columns(
             continue
         if light_blue_only and not is_light_blue_work_column(raw_header, i + 1):
             continue
-        if not show_empty_from_ac and is_cell_empty(row[unique_name]):
+        if (
+            not show_empty_from_ac
+            and is_cell_empty(row[unique_name])
+            and not is_memo_work_column(raw_header)
+        ):
+            continue
+        if is_memo_work_column(raw_header):
             continue
         if is_wiki_triplet_hidden(raw_header, row, header_map):
             continue
@@ -537,10 +675,10 @@ def is_correct_wiki_header(raw_header: str) -> bool:
 
 
 def is_inline_editable_column(unique_name: str, raw_header: str, col_index: int) -> bool:
-    """作業表内で直接編集する列（正しいwiki / 作業用 Status）。"""
-    if unique_name == COL_STATUS_WORK:
+    """作業表内で直接編集する列（正しいwiki / memo / 作業用 Status）。"""
+    if is_work_status_column(raw_header, col_index):
         return True
-    if is_correct_wiki_header(raw_header):
+    if is_memo_work_column(raw_header) or is_correct_wiki_header(raw_header):
         return is_writable_column(raw_header, col_index)
     return False
 
@@ -553,12 +691,28 @@ def form_widget_key(sheet_row_number: int, unique_name: str) -> str:
     return f"form_{sheet_row_number}_{unique_name}"
 
 
-def ensure_work_display_cols(work_cols: list[str], unique_headers: list[str]) -> list[str]:
-    """Status.1 は空でも作業表に出してインライン編集できるようにする。"""
+def ensure_work_display_cols(
+    work_cols: list[str],
+    raw_headers: list[str],
+    unique_headers: list[str],
+) -> list[str]:
+    """Status と memo（セクション条件付き）を作業表に含める。"""
     col_set = set(work_cols)
-    if COL_STATUS_WORK in unique_headers:
-        col_set.add(COL_STATUS_WORK)
-    return [name for name in unique_headers if name in col_set]
+    status_unique = resolve_work_status_unique(raw_headers, unique_headers)
+    if status_unique:
+        col_set.add(status_unique)
+    ordered = [name for name in unique_headers if name in col_set]
+    return filter_memo_display_columns(ordered, raw_headers, unique_headers)
+
+
+def work_sheet_edit_url() -> str:
+    """作業シートの Google Sheets URL（タブ指定付き）。"""
+    base = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit"
+    if USE_SERVER_CACHE:
+        gid = get_sheet_store().get_worksheet_gid()
+        if gid is not None:
+            return f"{base}#gid={gid}"
+    return base
 
 
 def is_writable_column(raw_header: str, col_index: int) -> bool:
@@ -566,7 +720,7 @@ def is_writable_column(raw_header: str, col_index: int) -> bool:
     letter = column_letter(col_index)
     if letter in WRITE_DENYLIST_COL_LETTERS:
         return False
-    if letter == WORK_STATUS_COL_LETTER and raw_header == "Status":
+    if is_work_status_column(raw_header, col_index):
         return True
     return raw_header in LIGHT_BLUE_WORK_HEADERS or raw_header == COL_ASSIGNEE
 
@@ -596,6 +750,9 @@ def collect_editable_columns(
 
     if COL_STATUS_WORK in unique_headers:
         add_column(COL_STATUS_WORK)
+    status_unique = resolve_work_status_unique(raw_headers, unique_headers)
+    if status_unique:
+        add_column(status_unique)
     if COL_ASSIGNEE in unique_headers:
         add_column(COL_ASSIGNEE)
 
@@ -712,13 +869,14 @@ def fetch_queue_index_from_sheets(
     sheet = get_read_worksheet()
     start_row = 2
     end_row = index_rows + 1
+    status_header = resolve_work_status_unique(raw_headers, unique_headers) or COL_STATUS_WORK
     range_specs: list[tuple[str, str]] = []
-    for header_name in ("連番", COL_STATUS_WORK, COL_ASSIGNEE):
+    for header_name in ("連番", status_header, COL_ASSIGNEE):
         cell_range = column_range_for_rows(unique_headers, header_name, start_row, end_row)
         if cell_range:
             range_specs.append((header_name, cell_range))
     if not range_specs:
-        return pd.DataFrame(columns=["_sheet_row_number", "連番", COL_STATUS_WORK, COL_ASSIGNEE])
+        return pd.DataFrame(columns=["_sheet_row_number", "連番", status_header, COL_ASSIGNEE])
 
     chunks = sheet.batch_get([r for _, r in range_specs])
     if len(range_specs) == 1:
@@ -741,8 +899,8 @@ def fetch_queue_index_from_sheets(
                 "連番": col_data.get("連番", [""] * row_count)[i]
                 if i < len(col_data.get("連番", []))
                 else "",
-                COL_STATUS_WORK: col_data.get(COL_STATUS_WORK, [""] * row_count)[i]
-                if i < len(col_data.get(COL_STATUS_WORK, []))
+                COL_STATUS_WORK: col_data.get(status_header, [""] * row_count)[i]
+                if i < len(col_data.get(status_header, []))
                 else "",
                 COL_ASSIGNEE: col_data.get(COL_ASSIGNEE, [""] * row_count)[i]
                 if i < len(col_data.get(COL_ASSIGNEE, []))
@@ -758,15 +916,56 @@ def load_sheet_structure():
         store = get_sheet_store()
         cached = store.get_structure()
         if cached is not None:
-            return cached
+            title, raw_headers, unique_headers, col_count = cached
+            return (
+                title,
+                raw_headers,
+                unique_headers,
+                effective_col_count(col_count, unique_headers),
+            )
 
     sheet = get_read_worksheet()
     raw_headers = sheet.row_values(1)
     unique_headers = make_unique_headers(raw_headers)
-    result = sheet.spreadsheet.title, raw_headers, unique_headers, sheet.col_count
+    col_count = effective_col_count(sheet.col_count, unique_headers)
+    result = sheet.spreadsheet.title, raw_headers, unique_headers, col_count
     if USE_SERVER_CACHE:
-        get_sheet_store().set_structure(*result)
+        store = get_sheet_store()
+        store.set_structure(*result)
+        store.set_worksheet_gid(sheet.id)
     return result
+
+
+def overlay_live_work_cells(
+    row_values: list[str],
+    sheet_row_number: int,
+    col_count: int,
+    unique_headers: list[str],
+) -> list[str]:
+    """FG(Status) / FH(Assignee) だけ API から再取得して行データに上書き。"""
+    read_width = effective_col_count(col_count, unique_headers)
+    values = list(row_values)
+    if len(values) < read_width:
+        values.extend([""] * (read_width - len(values)))
+
+    ranges = [
+        f"{letter}{sheet_row_number}"
+        for letter in (WORK_STATUS_COL_LETTER, WORK_ASSIGNEE_COL_LETTER)
+    ]
+    sheet = get_read_worksheet()
+    chunks = sheet.batch_get(ranges)
+    if len(ranges) == 1:
+        chunks = [chunks]
+
+    for letter, chunk in zip(
+        (WORK_STATUS_COL_LETTER, WORK_ASSIGNEE_COL_LETTER), chunks
+    ):
+        col_idx = column_index_from_letter(letter) - 1
+        cell_val = chunk[0][0] if chunk and chunk[0] else ""
+        if col_idx >= len(values):
+            values.extend([""] * (col_idx - len(values) + 1))
+        values[col_idx] = cell_val
+    return values
 
 
 def load_queue_index(
@@ -790,14 +989,20 @@ def load_queue_index(
 def fetch_sheet_row_from_api(
     sheet_row_number: int,
     col_count: int,
+    unique_headers: list[str],
 ) -> list[str]:
+    read_count = effective_col_count(col_count, unique_headers)
     sheet = get_read_worksheet()
     start = gspread.utils.rowcol_to_a1(sheet_row_number, 1)
-    end = gspread.utils.rowcol_to_a1(sheet_row_number, col_count)
+    end = gspread.utils.rowcol_to_a1(sheet_row_number, read_count)
     values = sheet.get(f"{start}:{end}")
     if not values:
-        return []
-    return values[0]
+        row_values: list[str] = []
+    else:
+        row_values = values[0]
+    return overlay_live_work_cells(
+        row_values, sheet_row_number, col_count, unique_headers
+    )
 
 
 def fetch_sheet_row(
@@ -805,14 +1010,24 @@ def fetch_sheet_row(
     col_count: int,
     unique_headers: list[str],
 ) -> list[str]:
-    """表示中の1行だけ取得（初回1 read/行、以降はサーバー内キャッシュ）。"""
+    """表示行取得。本体はキャッシュ、FG/FH は毎回 API で上書き。"""
+    read_count = effective_col_count(col_count, unique_headers)
+    row_values: list[str] | None = None
     if USE_SERVER_CACHE:
-        store = get_sheet_store()
-        cached = store.get_row_values(sheet_row_number)
-        if cached is not None:
-            return cached
+        row_values = get_sheet_store().get_row_values(sheet_row_number)
 
-    row_values = fetch_sheet_row_from_api(sheet_row_number, col_count)
+    if row_values is None:
+        row_values = fetch_sheet_row_from_api(
+            sheet_row_number, col_count, unique_headers
+        )
+    else:
+        row_values = overlay_live_work_cells(
+            row_values, sheet_row_number, col_count, unique_headers
+        )
+
+    if len(row_values) < read_count:
+        row_values = row_values + [""] * (read_count - len(row_values))
+
     if USE_SERVER_CACHE:
         get_sheet_store().save_row_values(sheet_row_number, row_values)
     return row_values
@@ -842,12 +1057,10 @@ def get_cached_row(
     unique_headers: list[str],
     col_count: int,
 ) -> pd.Series:
-    key = row_cache_key(sheet_row_number)
-    if key in st.session_state:
-        return st.session_state[key]
+    """行データは SQLite/API から毎回取得（session の古い行キャッシュは使わない）。"""
     row_values = fetch_sheet_row(sheet_row_number, col_count, unique_headers)
     series = build_row_series(sheet_row_number, raw_headers, unique_headers, row_values)
-    st.session_state[key] = series
+    st.session_state[row_cache_key(sheet_row_number)] = series
     return series
 
 
@@ -872,13 +1085,25 @@ def patch_queue_index(plan: pd.DataFrame) -> None:
     for _, item in plan.iterrows():
         sheet_row = int(item["行番号"])
         col_name = item["DataFrame列名"]
+        if (
+            item["列記号"] == WORK_STATUS_COL_LETTER
+            and item["列名"] == "Status"
+            and COL_STATUS_WORK in index_df.columns
+        ):
+            col_name = COL_STATUS_WORK
         if col_name not in index_df.columns:
             continue
         mask = index_df["_sheet_row_number"] == sheet_row
         if mask.any():
             index_df.loc[mask, col_name] = item["書き込み値"]
     if USE_SERVER_CACHE:
-        get_sheet_store().patch_queue_index(plan, COL_STATUS_WORK, COL_ASSIGNEE)
+        store_plan = plan.copy()
+        status_unique_mask = (
+            (store_plan["列記号"] == WORK_STATUS_COL_LETTER)
+            & (store_plan["列名"] == "Status")
+        )
+        store_plan.loc[status_unique_mask, "DataFrame列名"] = COL_STATUS_WORK
+        get_sheet_store().patch_queue_index(store_plan, COL_STATUS_WORK, COL_ASSIGNEE)
 
 
 def clear_all_data_cache() -> None:
@@ -892,6 +1117,9 @@ def clear_all_data_cache() -> None:
             del st.session_state[key]
     st.session_state.pop("_queue_index_rows", None)
     st.session_state.pop(SESSION_DISCORD_NAMES_KEY, None)
+    st.session_state.pop(COMPONENT_INLINE_SNAPSHOT_KEY, None)
+    st.session_state.pop(PENDING_SAVE_ROW_KEY, None)
+    st.session_state.pop(LAST_COMPONENT_FLUSH_KEY, None)
 
 
 def collect_inline_updates(
@@ -900,17 +1128,31 @@ def collect_inline_updates(
     raw_headers: list[str],
     unique_headers: list[str],
 ) -> dict[str, str]:
-    """フォーム外ウィジェットの値を session_state から確実に取得。"""
+    """iframe 編集値を session_state / 直近 component スナップショットから取得。"""
     header_by_unique = dict(zip(unique_headers, raw_headers))
+    prefix = f"inline_{sheet_row_number}_"
+    candidate_keys: dict[str, str] = {}
+
+    snapshot = st.session_state.get(COMPONENT_INLINE_SNAPSHOT_KEY, {})
+    if isinstance(snapshot, dict):
+        for key, value in snapshot.items():
+            if isinstance(key, str) and key.startswith(prefix):
+                candidate_keys[key] = "" if value is None else str(value)
+
+    for key, value in st.session_state.items():
+        if isinstance(key, str) and key.startswith(prefix):
+            candidate_keys[key] = str(value)
+
     updates: dict[str, str] = {}
-    for col_name in work_cols:
-        col_index = unique_headers.index(col_name) + 1
-        raw_header = header_by_unique[col_name]
-        if not is_inline_editable_column(col_name, raw_header, col_index):
+    for key, value in candidate_keys.items():
+        unique_name = key[len(prefix) :]
+        if unique_name not in unique_headers:
             continue
-        key = inline_widget_key(sheet_row_number, col_name)
-        if key in st.session_state:
-            updates[col_name] = str(st.session_state[key])
+        raw_header = header_by_unique[unique_name]
+        col_index = unique_headers.index(unique_name) + 1
+        if not is_inline_editable_column(unique_name, raw_header, col_index):
+            continue
+        updates[unique_name] = value
     return updates
 
 
@@ -922,6 +1164,15 @@ def clear_row_edit_state(sheet_row_number: int) -> None:
             continue
         if key.startswith(inline_prefix) or key.startswith(form_prefix):
             del st.session_state[key]
+    snapshot = st.session_state.get(COMPONENT_INLINE_SNAPSHOT_KEY)
+    if isinstance(snapshot, dict):
+        st.session_state[COMPONENT_INLINE_SNAPSHOT_KEY] = {
+            key: value
+            for key, value in snapshot.items()
+            if not (isinstance(key, str) and key.startswith(inline_prefix))
+        }
+    if st.session_state.get(PENDING_SAVE_ROW_KEY) == sheet_row_number:
+        st.session_state.pop(PENDING_SAVE_ROW_KEY, None)
 
 
 def init_inline_widget_state(
@@ -941,13 +1192,11 @@ def init_inline_widget_state(
         if key in st.session_state:
             continue
         current_val = row[col_name]
+        if is_work_status_column(raw_header, col_index):
+            st.session_state[key] = normalize_work_status(current_val)
+            continue
         val_str = "" if is_cell_empty(current_val) else str(current_val)
-        if col_name == COL_STATUS_WORK:
-            st.session_state[key] = (
-                val_str if val_str in WORK_STATUS_OPTIONS else STATUS_NOT_STARTED
-            )
-        else:
-            st.session_state[key] = val_str
+        st.session_state[key] = val_str
 
 
 def read_after_write(plan: pd.DataFrame) -> pd.DataFrame:
@@ -1093,16 +1342,11 @@ def render_navigation(
 
     with nav[2]:
         if st.button("次へ（保存）", type="primary", use_container_width=True):
-            if save_current_row(
-                sheet_row_number,
-                work_cols,
-                raw_headers,
-                unique_headers,
-                worker,
-            ):
-                st.rerun()
-            elif not ENABLE_SHEET_WRITES:
-                st.info("ドライラン結果を確認してください。")
+            st.session_state[PENDING_SAVE_ROW_KEY] = sheet_row_number
+            st.session_state[FLUSH_NONCE_KEY] = (
+                int(st.session_state.get(FLUSH_NONCE_KEY, 0)) + 1
+            )
+            st.rerun()
 
 
 WORK_TABLE_CSS = """
@@ -1318,9 +1562,10 @@ def build_edit_input_html(
     *,
     is_status: bool,
     is_wiki_edit: bool,
+    is_memo_edit: bool = False,
 ) -> str:
     if is_status:
-        current = value if value in WORK_STATUS_OPTIONS else STATUS_NOT_STARTED
+        current = normalize_work_status(value)
         options = []
         for option in WORK_STATUS_OPTIONS:
             selected = " selected" if option == current else ""
@@ -1331,7 +1576,7 @@ def build_edit_input_html(
             f'<select class="work-inline-native-select" '
             f'data-inline-key="{escape(widget_key)}">{"".join(options)}</select>'
         )
-    if is_wiki_edit:
+    if is_wiki_edit or is_memo_edit:
         return (
             f'<textarea class="work-inline-native-input work-inline-native-textarea" '
             f'rows="4" data-inline-key="{escape(widget_key)}">'
@@ -1388,14 +1633,18 @@ def build_work_row_component_html(
 
         if inline:
             widget_key = inline_widget_key(sheet_row_number, col_name)
-            current = str(st.session_state.get(widget_key, ""))
-            if col_name == COL_STATUS_WORK and current not in WORK_STATUS_OPTIONS:
-                current = STATUS_NOT_STARTED
+            if is_work_status_column(raw_header, col_index):
+                current = normalize_work_status(
+                    st.session_state.get(widget_key, row[col_name])
+                )
+            else:
+                current = str(st.session_state.get(widget_key, ""))
             body = build_edit_input_html(
                 widget_key,
                 current,
-                is_status=col_name == COL_STATUS_WORK,
+                is_status=is_work_status_column(raw_header, col_index),
                 is_wiki_edit=is_correct_wiki_header(raw_header),
+                is_memo_edit=is_memo_work_column(raw_header),
             )
             col_class = "work-inline-col-edit"
         else:
@@ -1410,24 +1659,27 @@ def build_work_row_component_html(
             build_work_column_html(letter, raw_header, col_class, width_px, body)
         )
 
-    sync_script = WORK_ROW_SYNC_SCRIPT.replace(
-        "__HEIGHT__", str(WORK_ROW_IFRAME_HEIGHT)
-    )
     return (
-        f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        f"<style>{WORK_ROW_COMPONENT_CSS}</style></head><body>"
+        f"<style>{WORK_ROW_COMPONENT_CSS}</style>"
         f'<div class="work-inline-outer"><div class="work-inline-track">'
         f'{"".join(parts)}'
-        f"</div></div>{sync_script}</body></html>"
+        f"</div></div>"
     )
 
 
-def apply_component_inline_values(result) -> None:
+def apply_component_inline_values(result, *, flush_nonce: int = 0) -> None:
     if not isinstance(result, dict):
         return
+    snapshot = st.session_state.get(COMPONENT_INLINE_SNAPSHOT_KEY, {})
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    snapshot.update(result)
+    st.session_state[COMPONENT_INLINE_SNAPSHOT_KEY] = snapshot
     for key, value in result.items():
         if isinstance(key, str) and key.startswith("inline_"):
             st.session_state[key] = "" if value is None else str(value)
+    if flush_nonce:
+        st.session_state[LAST_COMPONENT_FLUSH_KEY] = flush_nonce
 
 
 def render_readonly_cell_html(value: str) -> str:
@@ -1464,12 +1716,40 @@ def render_work_table_inline(
     html_doc = build_work_row_component_html(
         row, visible_cols, raw_headers, unique_headers, sheet_row_number
     )
-    result = components.html(
-        html_doc,
+    flush_nonce = 0
+    if st.session_state.get(PENDING_SAVE_ROW_KEY) == sheet_row_number:
+        flush_nonce = int(st.session_state.get(FLUSH_NONCE_KEY, 0))
+    result = WORK_ROW_COMPONENT(
+        html=html_doc,
         height=WORK_ROW_IFRAME_HEIGHT,
-        scrolling=False,
+        flush=flush_nonce,
+        key=f"work-row-{sheet_row_number}",
     )
-    apply_component_inline_values(result)
+    apply_component_inline_values(result, flush_nonce=flush_nonce)
+
+
+def maybe_process_pending_save(
+    sheet_row_number: int,
+    work_cols: list[str],
+    raw_headers: list[str],
+    unique_headers: list[str],
+    worker: str,
+) -> None:
+    """「次へ（保存）」押下後、component から値を受け取った rerun でだけ保存する。"""
+    if st.session_state.get(PENDING_SAVE_ROW_KEY) != sheet_row_number:
+        return
+    flush_nonce = int(st.session_state.get(FLUSH_NONCE_KEY, 0))
+    if st.session_state.get(LAST_COMPONENT_FLUSH_KEY) != flush_nonce:
+        return
+    if save_current_row(
+        sheet_row_number,
+        work_cols,
+        raw_headers,
+        unique_headers,
+        worker,
+    ):
+        st.session_state.pop(PENDING_SAVE_ROW_KEY, None)
+        st.rerun()
 
 
 def row_summary(row: pd.Series) -> str:
@@ -1667,6 +1947,11 @@ try:
     discord_names = load_assign_discord_names_safe()
 
     with st.sidebar:
+        st.link_button(
+            "作業シートを開く",
+            work_sheet_edit_url(),
+            use_container_width=True,
+        )
         st.subheader("作業設定")
         worker = render_worker_selector(discord_names)
 
@@ -1695,6 +1980,10 @@ try:
         st.caption(
             f"書き込み先: `{WRITE_TARGET_SHEET_NAME}` / "
             f"ENABLE={ENABLE_SHEET_WRITES} / PROD={ALLOW_PRODUCTION_WRITES}"
+        )
+        st.caption(
+            "保存: 「次へ（保存）」押下時のみ Sheets へ書き込み。"
+            "入力中は再読み込みしません。"
         )
         if USE_SERVER_CACHE:
             stats = get_sheet_store().cache_stats()
@@ -1778,7 +2067,7 @@ try:
         show_empty_from_ac=show_empty_from_ac,
         light_blue_only=light_blue_only,
     )
-    work_cols = ensure_work_display_cols(work_cols, unique_headers)
+    work_cols = ensure_work_display_cols(work_cols, raw_headers, unique_headers)
 
     st.caption(
         f"{spreadsheet_title} / {SHEET_NAME} / "
@@ -1796,6 +2085,13 @@ try:
             raw_headers,
             unique_headers,
             sheet_row_number,
+        )
+        maybe_process_pending_save(
+            sheet_row_number,
+            work_cols,
+            raw_headers,
+            unique_headers,
+            worker,
         )
     else:
         st.warning("作業欄の固定列が解決できません。ヘッダー行を確認してください。")

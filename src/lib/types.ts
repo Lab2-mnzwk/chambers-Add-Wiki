@@ -1,0 +1,72 @@
+export type QueueFilter =
+  | "未担当＋自分担当"
+  | "未担当"
+  | "自分担当"
+  | "すべて";
+
+export type WorkOptions = {
+  worker: string;
+  queueFilter: QueueFilter;
+  skipDone: boolean;
+  lightBlueOnly: boolean;
+  showEmptyFromAc: boolean;
+  indexRows: number;
+};
+
+export type SheetStructure = {
+  title: string;
+  rawHeaders: string[];
+  uniqueHeaders: string[];
+  colCount: number;
+};
+
+export type QueueRow = {
+  sheetRowNumber: number;
+  renban: string;
+  status: string;
+  assignee: string;
+};
+
+export type ColumnPayload = {
+  uniqueName: string;
+  rawHeader: string;
+  letter: string;
+  display: string;
+  value: string;
+  inline: boolean;
+  isStatus: boolean;
+  isMemo: boolean;
+  isWiki: boolean;
+  isWikiEdit: boolean;
+  isLeading: boolean;
+};
+
+export type RowPayload = {
+  sheetRowNumber: number;
+  summary: string;
+  columns: ColumnPayload[];
+};
+
+export type BootstrapPayload = {
+  spreadsheetTitle: string;
+  sheetName: string;
+  sheetUrl: string;
+  discordNames: string[];
+  statusOptions: string[];
+  defaultIndexRows: number;
+  enableWrites: boolean;
+};
+
+export type SavePayload = {
+  sheetRowNumber: number;
+  worker: string;
+  edits: Record<string, string>;
+  queueSheetRows: number[];
+  options: WorkOptions;
+};
+
+export type SaveResult = {
+  savedCells: number;
+  nextSheetRowNumber: number | null;
+  atEnd: boolean;
+};

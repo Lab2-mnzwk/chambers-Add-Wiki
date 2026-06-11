@@ -21,6 +21,7 @@ META_UNIQUE_HEADERS = "unique_headers"
 META_COL_COUNT = "col_count"
 META_INDEX_ROWS = "index_rows"
 META_INDEX_SYNCED_AT = "index_synced_at"
+META_WORKSHEET_GID = "worksheet_gid"
 
 
 def default_cache_path(spreadsheet_id: str) -> Path:
@@ -140,6 +141,18 @@ class SheetStore:
         self._set_meta(META_RAW_HEADERS, json.dumps(raw_headers, ensure_ascii=False))
         self._set_meta(META_UNIQUE_HEADERS, json.dumps(unique_headers, ensure_ascii=False))
         self._set_meta(META_COL_COUNT, str(col_count))
+
+    def get_worksheet_gid(self) -> int | None:
+        raw = self._get_meta(META_WORKSHEET_GID)
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    def set_worksheet_gid(self, gid: int) -> None:
+        self._set_meta(META_WORKSHEET_GID, str(gid))
 
     def has_queue_index(self, index_rows: int) -> bool:
         limit_raw = self._get_meta(META_INDEX_ROWS)

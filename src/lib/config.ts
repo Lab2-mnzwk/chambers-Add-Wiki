@@ -1,0 +1,107 @@
+export const SPREADSHEET_ID =
+  process.env.SPREADSHEET_ID ?? "1jGba1Vnzjlvf6dNj6hqVRYoPEkcJVkeU1dND-vnThrY";
+export const SHEET_NAME = "wiki付与作業シート（第一弾）";
+export const ASSIGN_SHEET_NAME = "アサイン";
+export const DISCORD_NAME_COLUMN = "discord名";
+
+export const COL_STATUS_WORK = "Status.1";
+export const COL_ASSIGNEE = "Assignee";
+
+export const ENABLE_SHEET_WRITES = process.env.ENABLE_SHEET_WRITES !== "false";
+
+export const STATUS_NOT_STARTED = "未着手";
+export const STATUS_DONE = "完了";
+export const STATUS_NEEDS_REVIEW = "要確認";
+export const WORK_STATUS_OPTIONS = [
+  STATUS_NOT_STARTED,
+  STATUS_DONE,
+  STATUS_NEEDS_REVIEW,
+] as const;
+
+export const LEADING_FIXED_HEADERS = [
+  "head_page",
+  "tail_page",
+  "通し番号",
+  "連番",
+  "STARTDATE",
+  "ENDDATE",
+] as const;
+
+export const WORK_TABLE_START_HEADER = "ENTITY_NAME";
+export const WORK_STATUS_COL_LETTER = "FG";
+export const WORK_ASSIGNEE_COL_LETTER = "FH";
+export const DEFAULT_INDEX_ROWS = 10000;
+export const WRITE_DENYLIST_COL_LETTERS = new Set(["AE"]);
+
+export const MEMO_WORK_HEADERS = [
+  "Agent_memo",
+  "Place_memo",
+  "Patient-Theme_memo",
+  "Territory_memo",
+] as const;
+
+export const MEMO_SECTION_BY_HEADER: Record<string, string> = {
+  Agent_memo: "Agent",
+  Place_memo: "Place",
+  "Patient-Theme_memo": "Patient-Theme",
+  Territory_memo: "Territory",
+};
+
+function buildLightBlueWorkHeaders(): Set<string> {
+  const names = new Set<string>([
+    "Agent_memo",
+    "Place_memo",
+    "Patient-Theme_memo",
+    "Territory_memo",
+  ]);
+  for (let i = 1; i <= 5; i++) names.add(`A_name${i}`);
+  for (let i = 6; i <= 8; i++) names.add(`A_${i}`);
+  for (let i = 1; i <= 8; i++) {
+    names.add(`A_Wiki${i}`);
+    names.add(`A_正しいwiki${i}`);
+  }
+  for (let i = 1; i <= 5; i++) {
+    names.add(`Pl_name${i}`);
+    names.add(`Pl_Wiki${i}`);
+    names.add(`Pl_正しいwiki${i}`);
+  }
+  for (let i = 1; i <= 7; i++) {
+    names.add(`P-T_${i}`);
+    names.add(`P-T_Wiki${i}`);
+    names.add(`P-T_正しいwiki${i}`);
+  }
+  for (let i = 1; i <= 9; i++) {
+    names.add(`Te_name${i}`);
+    names.add(`Te_Wiki${i}`);
+    names.add(`Te_正しいwiki${i}`);
+  }
+  return names;
+}
+
+export const LIGHT_BLUE_WORK_HEADERS = buildLightBlueWorkHeaders();
+
+export function buildWikiTripletRules(): [string, string, string][] {
+  const rules: [string, string, string][] = [];
+  for (let i = 1; i <= 5; i++) {
+    rules.push([`A_name${i}`, `A_Wiki${i}`, `A_正しいwiki${i}`]);
+  }
+  for (let i = 6; i <= 8; i++) {
+    rules.push([`A_${i}`, `A_Wiki${i}`, `A_正しいwiki${i}`]);
+  }
+  for (let i = 1; i <= 5; i++) {
+    rules.push([`Pl_name${i}`, `Pl_Wiki${i}`, `Pl_正しいwiki${i}`]);
+  }
+  for (let i = 1; i <= 7; i++) {
+    rules.push([`P-T_${i}`, `P-T_Wiki${i}`, `P-T_正しいwiki${i}`]);
+  }
+  for (let i = 1; i <= 9; i++) {
+    rules.push([`Te_name${i}`, `Te_Wiki${i}`, `Te_正しいwiki${i}`]);
+  }
+  return rules;
+}
+
+export const WIKI_TRIPLET_RULES = buildWikiTripletRules();
+
+export function workSheetEditUrl(): string {
+  return `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/edit`;
+}
