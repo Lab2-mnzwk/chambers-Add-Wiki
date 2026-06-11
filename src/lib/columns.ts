@@ -3,6 +3,7 @@ import {
   COL_STATUS_WORK,
   FULL_EDIT_COLUMN_RANGES,
   FULL_EDIT_DISPLAY_RANGE,
+  FULL_EDIT_HIDDEN_RANGES,
   LEADING_FIXED_HEADERS,
   LIGHT_BLUE_WORK_HEADERS,
   MEMO_SECTION_BY_HEADER,
@@ -29,12 +30,21 @@ const FULL_EDIT_DISPLAY_BOUNDS: [number, number] = [
 const FULL_EDIT_BOUNDS: [number, number][] = FULL_EDIT_COLUMN_RANGES.map(
   ([from, to]) => [columnIndexFromLetter(from), columnIndexFromLetter(to)]
 );
+const FULL_EDIT_HIDDEN_BOUNDS: [number, number][] = FULL_EDIT_HIDDEN_RANGES.map(
+  ([from, to]) => [columnIndexFromLetter(from), columnIndexFromLetter(to)]
+);
 
-/** 全列表示モードで表示対象とする列か（AN〜FT） */
+/** 全列表示モードで明示的に非表示とする列か */
+export function isFullHiddenColIndex(colIndex: number): boolean {
+  return FULL_EDIT_HIDDEN_BOUNDS.some(([a, b]) => colIndex >= a && colIndex <= b);
+}
+
+/** 全列表示モードで表示対象とする列か（AN〜FT、ただし除外範囲を除く） */
 export function isFullDisplayColIndex(colIndex: number): boolean {
   return (
     colIndex >= FULL_EDIT_DISPLAY_BOUNDS[0] &&
-    colIndex <= FULL_EDIT_DISPLAY_BOUNDS[1]
+    colIndex <= FULL_EDIT_DISPLAY_BOUNDS[1] &&
+    !isFullHiddenColIndex(colIndex)
   );
 }
 

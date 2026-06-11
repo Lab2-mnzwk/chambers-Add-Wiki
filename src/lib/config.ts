@@ -58,6 +58,22 @@ export const FULL_EDIT_COLUMN_RANGES: [string, string][] = [
   ["AN", "FD"],
   ["FJ", "FT"],
 ];
+/** 全列表示・編集モード: 表示範囲内でも非表示にする列レター範囲（両端含む） */
+export const FULL_EDIT_HIDDEN_RANGES: [string, string][] = [
+  ["BC", "BK"],
+  ["BM", "BV"],
+  ["CS", "DB"],
+  ["DO", "DQ"],
+  ["DS", "EB"],
+  ["ET", "FC"],
+  ["FE", "FF"],
+  ["FI", "FI"],
+  ["FK", "FK"],
+  ["FM", "FM"],
+  ["FO", "FO"],
+  ["FQ", "FQ"],
+  ["FS", "FS"],
+];
 
 export const MEMO_WORK_HEADERS = [
   "Agent_memo",
