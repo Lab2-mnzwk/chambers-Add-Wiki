@@ -11,7 +11,7 @@ import type {
   WorkOptions,
 } from "@/lib/types";
 import { applyTheme, loadThemeMode, type ThemeMode } from "@/lib/theme";
-import { STATUS_DONE } from "@/lib/config";
+import { ASSIGN_ALL_ROWS_NAME, STATUS_DONE } from "@/lib/config";
 
 const PREFS_KEY = "wikiWorkNext";
 
@@ -270,6 +270,7 @@ export function WorkApp() {
 
       if (
         options.worker &&
+        options.worker !== ASSIGN_ALL_ROWS_NAME &&
         payload.assignee &&
         payload.assignee !== options.worker
       ) {

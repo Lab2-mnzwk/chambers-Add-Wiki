@@ -1,4 +1,5 @@
 import {
+  ASSIGN_ALL_ROWS_NAME,
   COL_ASSIGNEE,
   COL_STATUS_WORK,
   FULL_EDIT_COLUMN_RANGES,
@@ -631,6 +632,11 @@ export function filterQueueRows(
 
   if (options.skipDone) {
     filtered = filtered.filter((r) => r.status.trim() !== STATUS_DONE);
+  }
+
+  // 「全体」は全件表示（Assignee で絞らない）
+  if (worker === ASSIGN_ALL_ROWS_NAME) {
+    return filtered.map((r) => r.sheetRowNumber);
   }
 
   if (options.queueFilter === "未担当") {
