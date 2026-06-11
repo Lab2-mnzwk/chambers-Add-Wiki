@@ -297,12 +297,7 @@ export function WorkApp() {
     return (
       <div className={styles.page}>
         <header className={styles.header}>
-          <div>
-            <h1 className={styles.title}>PJ140 Wiki付与</h1>
-            <p className={`${styles.meta} ${styles.metaDesktop}`}>
-              {`${bootstrap.spreadsheetTitle} / ${bootstrap.sheetName}`}
-            </p>
-          </div>
+          <h1 className={styles.title}>PJ140 Wiki付与</h1>
         </header>
         {session?.error && (
           <p className={styles.statusError}>
@@ -319,13 +314,6 @@ export function WorkApp() {
       <header className={styles.header}>
         <div className={styles.headerMain}>
           <h1 className={styles.title}>PJ140 Wiki付与</h1>
-          <p className={`${styles.meta} ${styles.metaDesktop}`}>
-            {bootstrap
-              ? `${bootstrap.spreadsheetTitle} / ${bootstrap.sheetName}${
-                  bootstrap.enableWrites ? "" : "（書き込み OFF）"
-                } · Next.js`
-              : "読み込み中…"}
-          </p>
         </div>
         <div className={styles.headerActions}>
           {bootstrap?.authMode === "oauth" && bootstrap.userEmail ? (
