@@ -135,27 +135,6 @@ export function mergeWikiHistoryEntry(
   return { ...index, entries, builtAt: Date.now() };
 }
 
-/** 正しいwiki 列に対応する name / wiki の現在値 */
-export function tripletValuesForOkHeader(
-  okRawHeader: string,
-  rowByUnique: Record<string, string>,
-  rawHeaders: string[],
-  uniqueHeaders: string[]
-): { name: string; wiki: string } | null {
-  const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
-  for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
-    if (okHeader !== okRawHeader) continue;
-    const nameUnique = headerMap[nameHeader];
-    const wikiUnique = headerMap[wikiHeader];
-    if (!nameUnique || !wikiUnique) return null;
-    return {
-      name: String(rowByUnique[nameUnique] ?? "").trim(),
-      wiki: String(rowByUnique[wikiUnique] ?? "").trim(),
-    };
-  }
-  return null;
-}
-
 /** 保存された正しいwiki 列だけ履歴にマージ */
 export function mergeWikiHistoryFromSave(
   index: WikiHistoryIndex,

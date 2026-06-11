@@ -16,7 +16,6 @@ import {
 } from "./config";
 
 import type { ColumnPayload, WorkOptions } from "./types";
-import { tripletValuesForOkHeader } from "./wiki-history";
 
 const LEADING = LEADING_FIXED_HEADERS;
 const WIKI_NAME_HEADERS = new Set(WIKI_TRIPLET_RULES.map(([name]) => name));
@@ -144,6 +143,27 @@ export function resolveHeaderToUnique(
   return mapping;
 }
 
+/** 正しいwiki 列に対応する name / wiki の現在値 */
+export function tripletValuesForOkHeader(
+  okRawHeader: string,
+  rowByUnique: Record<string, string>,
+  rawHeaders: string[],
+  uniqueHeaders: string[]
+): { name: string; wiki: string } | null {
+  const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
+  for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
+    if (okHeader !== okRawHeader) continue;
+    const nameUnique = headerMap[nameHeader];
+    const wikiUnique = headerMap[wikiHeader];
+    if (!nameUnique || !wikiUnique) return null;
+    return {
+      name: String(rowByUnique[nameUnique] ?? "").trim(),
+      wiki: String(rowByUnique[wikiUnique] ?? "").trim(),
+    };
+  }
+  return null;
+}
+
 export function sectionForWorkRawHeader(rawHeader: string): string | null {
   if (rawHeader.startsWith("Pl_")) return "Place";
   if (rawHeader.startsWith("P-T_")) return "Patient-Theme";
@@ -226,26 +246,79 @@ export function effectiveColCount(colCount: number, uniqueHeaders: string[]): nu
   return Math.max(colCount, maxIndex, uniqueHeaders.length);
 }
 
-function isWikiTripletHidden(
-  rawHeader: string,
+function findWikiTripletByRawHeader(
+  rawHeader: string
+): [string, string, string] | null {
+  for (const rule of WIKI_TRIPLET_RULES) {
+    if (rule.includes(rawHeader)) return rule;
+  }
+  return null;
+}
+
+/** Wiki 三つ組の表示状態（作業表の列抽出用） */
+export type WikiTripletDisplayState =
+  | "empty_name"
+  | "wiki_dash"
+  | "active";
+
+export function wikiTripletDisplayState(
+  nameHeader: string,
+  wikiHeader: string,
   rowByUnique: Record<string, string>,
   headerMap: Record<string, string>
-): boolean {
-  for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
-    if (![nameHeader, wikiHeader, okHeader].includes(rawHeader)) continue;
-    const nameUnique = headerMap[nameHeader];
-    const wikiUnique = headerMap[wikiHeader];
-    if (!nameUnique || !(nameUnique in rowByUnique)) continue;
-    if (isCellEmpty(rowByUnique[nameUnique])) continue;
-    if (
-      wikiUnique &&
-      wikiUnique in rowByUnique &&
-      isWikiDash(rowByUnique[wikiUnique])
-    ) {
-      return true;
-    }
+): WikiTripletDisplayState {
+  const nameUnique = headerMap[nameHeader];
+  const wikiUnique = headerMap[wikiHeader];
+  if (!nameUnique || !(nameUnique in rowByUnique)) return "empty_name";
+  if (isCellEmpty(rowByUnique[nameUnique])) return "empty_name";
+  if (
+    wikiUnique &&
+    wikiUnique in rowByUnique &&
+    isWikiDash(rowByUnique[wikiUnique])
+  ) {
+    return "wiki_dash";
   }
-  return false;
+  return "active";
+}
+
+/**
+ * AC 以降の作業列を表示するか。
+ * - 水色列のみ / 空列も表示 は options で制御
+ * - Wiki 三つ組: Wiki が `-` なら三つ組全体を非表示
+ * - 名称が空の三つ組は showEmptyFromAc で表示
+ * - active 三つ組の空セルも showEmptyFromAc で表示
+ */
+export function shouldIncludeWorkColumn(
+  rawHeader: string,
+  uniqueName: string,
+  rowByUnique: Record<string, string>,
+  headerMap: Record<string, string>,
+  colIndex: number,
+  options: Pick<WorkOptions, "showEmptyFromAc" | "lightBlueOnly">
+): boolean {
+  const lightBlueOnly = options.lightBlueOnly !== false;
+  const showEmptyFromAc = options.showEmptyFromAc;
+
+  if (lightBlueOnly && !isLightBlueWorkColumn(rawHeader, colIndex)) return false;
+  if (isMemoWorkColumn(rawHeader)) return false;
+
+  const triplet = findWikiTripletByRawHeader(rawHeader);
+  if (triplet) {
+    const [nameHeader, wikiHeader] = triplet;
+    const state = wikiTripletDisplayState(
+      nameHeader,
+      wikiHeader,
+      rowByUnique,
+      headerMap
+    );
+    if (state === "wiki_dash") return false;
+    if (state === "empty_name") return showEmptyFromAc;
+    if (!isCellEmpty(rowByUnique[uniqueName])) return true;
+    return showEmptyFromAc;
+  }
+
+  if (isCellEmpty(rowByUnique[uniqueName]) && !showEmptyFromAc) return false;
+  return true;
 }
 
 function expandWikiTripletColumns(
@@ -307,8 +380,6 @@ export function workDisplayColumns(
   uniqueHeaders: string[],
   options: Pick<WorkOptions, "showEmptyFromAc" | "lightBlueOnly">
 ): string[] {
-  const showEmptyFromAc = options.showEmptyFromAc;
-  const lightBlueOnly = options.lightBlueOnly !== false;
   const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
   const cols: string[] = [];
 
@@ -324,16 +395,18 @@ export function workDisplayColumns(
     const uniqueName = uniqueHeaders[i];
     const rawHeader = rawHeaders[i];
     if (!(uniqueName in rowByUnique) || cols.includes(uniqueName)) continue;
-    if (lightBlueOnly && !isLightBlueWorkColumn(rawHeader, i + 1)) continue;
     if (
-      !showEmptyFromAc &&
-      isCellEmpty(rowByUnique[uniqueName]) &&
-      !isMemoWorkColumn(rawHeader)
+      !shouldIncludeWorkColumn(
+        rawHeader,
+        uniqueName,
+        rowByUnique,
+        headerMap,
+        i + 1,
+        options
+      )
     ) {
       continue;
     }
-    if (isMemoWorkColumn(rawHeader)) continue;
-    if (isWikiTripletHidden(rawHeader, rowByUnique, headerMap)) continue;
     cols.push(uniqueName);
   }
 
@@ -342,7 +415,7 @@ export function workDisplayColumns(
     rawHeaders,
     uniqueHeaders,
     cols,
-    lightBlueOnly
+    options.lightBlueOnly !== false
   );
 }
 

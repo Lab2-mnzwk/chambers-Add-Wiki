@@ -1,17 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { signOut, useSession } from "next-auth/react";
 import styles from "./WorkApp.module.css";
 import { LoginPanel } from "./LoginPanel";
 import { WorkRowTable } from "./WorkRowTable";
 import type {
   BootstrapPayload,
-  QueueFilter,
   RowPayload,
   WorkOptions,
 } from "@/lib/types";
 import { applyTheme, loadThemeMode, type ThemeMode } from "@/lib/theme";
+import { STATUS_DONE } from "@/lib/config";
 
 const PREFS_KEY = "wikiWorkNext";
 
@@ -23,6 +23,17 @@ const defaultOptions: WorkOptions = {
   showEmptyFromAc: false,
   indexRows: 10000,
 };
+
+function loadStoredOptions(): WorkOptions {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return defaultOptions;
+    const prefs = JSON.parse(raw) as Partial<WorkOptions>;
+    return { ...defaultOptions, ...prefs, queueFilter: "自分担当" };
+  } catch {
+    return defaultOptions;
+  }
+}
 
 function optionsQuery(options: WorkOptions): string {
   const params = new URLSearchParams({
@@ -43,19 +54,23 @@ function rowQuery(options: WorkOptions): string {
 export function WorkApp() {
   const { data: session, status: sessionStatus } = useSession();
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
-  const [options, setOptions] = useState<WorkOptions>(defaultOptions);
+  const [options, setOptions] = useState<WorkOptions>(loadStoredOptions);
   const [queueRows, setQueueRows] = useState<number[]>([]);
   const [queueIndex, setQueueIndex] = useState(0);
   const [history, setHistory] = useState<number[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [rowPayload, setRowPayload] = useState<RowPayload | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
+  const [doneRows, setDoneRows] = useState<Set<number>>(new Set());
   const [status, setStatus] = useState("");
   const [statusKind, setStatusKind] = useState<"" | "ok" | "error">("");
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState("");
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [moreSettingsOpen, setMoreSettingsOpen] = useState(false);
+  const prevQueueIdentityRef = useRef({
+    worker: defaultOptions.worker,
+  });
 
   const currentRow = useMemo(() => {
     if (historyIndex >= 0 && history[historyIndex]) return history[historyIndex];
@@ -74,14 +89,7 @@ export function WorkApp() {
   };
 
   const loadPrefs = useCallback(() => {
-    try {
-      const raw = localStorage.getItem(PREFS_KEY);
-      if (!raw) return;
-      const prefs = JSON.parse(raw) as Partial<WorkOptions>;
-      setOptions((prev) => ({ ...prev, ...prefs }));
-    } catch {
-      /* ignore */
-    }
+    setOptions(loadStoredOptions());
   }, []);
 
   const savePrefs = useCallback((next: WorkOptions) => {
@@ -187,25 +195,18 @@ export function WorkApp() {
 
   useEffect(() => {
     if (!bootstrap || bootstrap.authRequired) return;
-    if (
-      !options.worker &&
-      (options.queueFilter === "自分担当" ||
-        options.queueFilter === "未担当＋自分担当")
-    ) {
-      return;
-    }
+    if (!options.worker) return;
     savePrefs(options);
-    loadQueue(options, false).catch((e) => setMessage(String(e), "error"));
+
+    const workerChanged = prevQueueIdentityRef.current.worker !== options.worker;
+    prevQueueIdentityRef.current = {
+      worker: options.worker,
+    };
+
+    const keepPosition = !workerChanged;
+    loadQueue(options, keepPosition).catch((e) => setMessage(String(e), "error"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    bootstrap,
-    options.worker,
-    options.queueFilter,
-    options.skipDone,
-    options.lightBlueOnly,
-    options.showEmptyFromAc,
-    options.indexRows,
-  ]);
+  }, [bootstrap, options.worker, options.skipDone, options.indexRows]);
 
   const updateOption = <K extends keyof WorkOptions>(
     key: K,
@@ -218,9 +219,33 @@ export function WorkApp() {
     });
   };
 
+  const updateDisplayOption = async (
+    key: "showEmptyFromAc" | "lightBlueOnly",
+    value: boolean
+  ) => {
+    const next = { ...options, [key]: value };
+    setOptions(next);
+    savePrefs(next);
+    if (!currentRow) return;
+    try {
+      await loadRow(currentRow, next);
+    } catch (e) {
+      setMessage(String(e), "error");
+    }
+  };
+
   const goPrev = () => {
     if (historyIndex <= 0) return;
-    const nextIndex = historyIndex - 1;
+    let nextIndex = historyIndex - 1;
+    if (options.skipDone) {
+      while (nextIndex >= 0 && doneRows.has(history[nextIndex])) {
+        nextIndex -= 1;
+      }
+      if (nextIndex < 0) {
+        showToast("前の未完了行がありません");
+        return;
+      }
+    }
     setHistoryIndex(nextIndex);
     const row = history[nextIndex];
     const idx = queueRows.indexOf(row);
@@ -252,6 +277,11 @@ export function WorkApp() {
     if (!currentRow || loading) return;
     setLoading(true);
     setMessage("保存中…");
+    const statusCol = rowPayload?.columns.find((c) => c.isStatus);
+    const savedStatus = statusCol
+      ? edits[statusCol.uniqueName] ?? statusCol.value
+      : "";
+    const savedRow = currentRow;
     try {
       const res = await fetch("/api/save", {
         method: "POST",
@@ -266,6 +296,13 @@ export function WorkApp() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "保存に失敗");
+
+      setDoneRows((prev) => {
+        const next = new Set(prev);
+        if (savedStatus.trim() === STATUS_DONE) next.add(savedRow);
+        else next.delete(savedRow);
+        return next;
+      });
 
       if (data.nextSheetRowNumber) {
         setMessage(`${data.savedCells} セルを保存しました。`, "ok");
@@ -361,19 +398,6 @@ export function WorkApp() {
               ))}
             </select>
 
-            <label className={styles.label}>表示対象行</label>
-            <select
-              value={options.queueFilter}
-              onChange={(e) =>
-                updateOption("queueFilter", e.target.value as QueueFilter)
-              }
-            >
-              <option value="未担当＋自分担当">未担当＋自分担当</option>
-              <option value="未担当">未担当</option>
-              <option value="自分担当">自分担当</option>
-              <option value="すべて">すべて</option>
-            </select>
-
             <label className={styles.check}>
               <input
                 type="checkbox"
@@ -386,19 +410,21 @@ export function WorkApp() {
               <input
                 type="checkbox"
                 checked={options.lightBlueOnly}
-                onChange={(e) => updateOption("lightBlueOnly", e.target.checked)}
+                onChange={(e) =>
+                  void updateDisplayOption("lightBlueOnly", e.target.checked)
+                }
               />
-              AC列以降は水色列のみ
+              Wiki確認対象行のみ
             </label>
             <label className={styles.check}>
               <input
                 type="checkbox"
                 checked={options.showEmptyFromAc}
                 onChange={(e) =>
-                  updateOption("showEmptyFromAc", e.target.checked)
+                  void updateDisplayOption("showEmptyFromAc", e.target.checked)
                 }
               />
-              AC列以降の空列も表示
+              空の列も表示する
             </label>
           </div>
 
@@ -471,19 +497,13 @@ export function WorkApp() {
         <main className={styles.main}>
           {!queueRows.length && bootstrap && options.worker && (
             <div className={styles.empty}>
-              条件に一致する行がありません。フィルタを変更してください。
+              担当の行が見つかりません。作業者名を確認してください。
             </div>
           )}
 
-          {!queueRows.length &&
-            bootstrap &&
-            !options.worker &&
-            options.queueFilter !== "すべて" &&
-            options.queueFilter !== "未担当" && (
-              <div className={styles.empty}>
-                作業者名を選択してください。
-              </div>
-            )}
+          {!queueRows.length && bootstrap && !options.worker && (
+            <div className={styles.empty}>作業者名を選択してください。</div>
+          )}
 
           {rowPayload && (
             <>
