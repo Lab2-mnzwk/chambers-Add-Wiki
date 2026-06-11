@@ -3,8 +3,8 @@ import { ThemeInit } from "@/components/ThemeInit";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Wiki付与 行作業",
-  description: "Google Sheets 行単位作業ビュー（Next.js）",
+  title: "PJ140 Wiki付与",
+  description: "PJ140 Wiki付与 行作業ビュー",
 };
 
 export default function RootLayout({

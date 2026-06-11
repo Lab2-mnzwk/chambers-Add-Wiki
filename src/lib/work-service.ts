@@ -3,6 +3,7 @@ import {
   DEFAULT_INDEX_ROWS,
   ENABLE_SHEET_WRITES,
   SHEET_NAME,
+  SPREADSHEET_DISPLAY_TITLE,
   WORK_STATUS_OPTIONS,
   workSheetEditUrl,
 } from "./config";
@@ -54,10 +55,10 @@ async function ensureStructure(): Promise<SheetStructure> {
 }
 
 export async function getBootstrap(): Promise<BootstrapPayload> {
-  const structure = await ensureStructure();
+  await ensureStructure();
   const discordNames = await loadAssignDiscordNames();
   return {
-    spreadsheetTitle: structure.title,
+    spreadsheetTitle: SPREADSHEET_DISPLAY_TITLE,
     sheetName: SHEET_NAME,
     sheetUrl: workSheetEditUrl(),
     discordNames,

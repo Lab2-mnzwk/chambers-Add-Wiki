@@ -290,7 +290,7 @@ export function WorkApp() {
     <div className={styles.page}>
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>Wiki付与 行作業</h1>
+          <h1 className={styles.title}>PJ140 Wiki付与</h1>
           <p className={styles.meta}>
             {bootstrap
               ? `${bootstrap.spreadsheetTitle} / ${bootstrap.sheetName}${
