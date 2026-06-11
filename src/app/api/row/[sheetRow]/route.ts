@@ -12,14 +12,11 @@ export async function GET(
     if (!sheetRowNumber || sheetRowNumber < 2) {
       return NextResponse.json({ error: "Invalid row number" }, { status: 400 });
     }
-    const showEmptyFromAc =
-      request.nextUrl.searchParams.get("showEmptyFromAc") === "true";
     const lightBlueOnly =
       request.nextUrl.searchParams.get("lightBlueOnly") !== "false";
     const fullEditMode =
       request.nextUrl.searchParams.get("fullEditMode") === "true";
     const payload = await getRow(sheetRowNumber, {
-      showEmptyFromAc,
       lightBlueOnly,
       fullEditMode,
     });

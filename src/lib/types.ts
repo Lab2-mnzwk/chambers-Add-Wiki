@@ -9,7 +9,6 @@ export type WorkOptions = {
   queueFilter: QueueFilter;
   skipDone: boolean;
   lightBlueOnly: boolean;
-  showEmptyFromAc: boolean;
   fullEditMode: boolean;
   indexRows: number;
 };
@@ -50,6 +49,7 @@ export type ColumnPayload = {
 export type RowPayload = {
   sheetRowNumber: number;
   summary: string;
+  assignee: string;
   columns: ColumnPayload[];
 };
 

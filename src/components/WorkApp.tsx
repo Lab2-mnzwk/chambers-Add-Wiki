@@ -20,7 +20,6 @@ const defaultOptions: WorkOptions = {
   queueFilter: "自分担当",
   skipDone: true,
   lightBlueOnly: true,
-  showEmptyFromAc: false,
   fullEditMode: false,
   indexRows: 10000,
 };
@@ -42,14 +41,13 @@ function optionsQuery(options: WorkOptions): string {
     queueFilter: options.queueFilter,
     skipDone: String(options.skipDone),
     lightBlueOnly: String(options.lightBlueOnly),
-    showEmptyFromAc: String(options.showEmptyFromAc),
     indexRows: String(options.indexRows),
   });
   return params.toString();
 }
 
 function rowQuery(options: WorkOptions): string {
-  return `showEmptyFromAc=${options.showEmptyFromAc}&lightBlueOnly=${options.lightBlueOnly}&fullEditMode=${options.fullEditMode}`;
+  return `lightBlueOnly=${options.lightBlueOnly}&fullEditMode=${options.fullEditMode}`;
 }
 
 export function WorkApp() {
@@ -106,7 +104,7 @@ export function WorkApp() {
   };
 
   const loadRow = useCallback(
-    async (sheetRowNumber: number, opts: WorkOptions) => {
+    async (sheetRowNumber: number, opts: WorkOptions): Promise<RowPayload> => {
       setMessage("行を読み込み中…");
       const res = await fetch(`/api/row/${sheetRowNumber}?${rowQuery(opts)}`);
       const data = await res.json();
@@ -114,6 +112,7 @@ export function WorkApp() {
       setRowPayload(data as RowPayload);
       syncEditsFromPayload(data as RowPayload);
       setMessage("");
+      return data as RowPayload;
     },
     []
   );
@@ -221,7 +220,7 @@ export function WorkApp() {
   };
 
   const updateDisplayOption = async (
-    key: "showEmptyFromAc" | "lightBlueOnly" | "fullEditMode",
+    key: "lightBlueOnly" | "fullEditMode",
     value: boolean
   ) => {
     const next = { ...options, [key]: value };
@@ -254,7 +253,7 @@ export function WorkApp() {
     loadRow(row, options).catch((e) => setMessage(String(e), "error"));
   };
 
-  const goJump = () => {
+  const goJump = async () => {
     const target = Number(
       (document.getElementById("jumpRow") as HTMLInputElement | null)?.value
     );
@@ -262,16 +261,40 @@ export function WorkApp() {
       setMessage("行番号は 2 以上を指定してください。", "error");
       return;
     }
-    const nextHistory = history.slice(0, historyIndex + 1);
-    nextHistory.push(target);
-    setHistory(nextHistory);
-    setHistoryIndex(nextHistory.length - 1);
-    const idx = queueRows.indexOf(target);
-    if (idx >= 0) setQueueIndex(idx);
-    if (!queueRows.includes(target)) {
-      showToast("現在のキュー外の行です（表示のみ）");
+    try {
+      setMessage("行を読み込み中…");
+      const res = await fetch(`/api/row/${target}?${rowQuery(options)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "行の読み込みに失敗");
+      const payload = data as RowPayload;
+
+      if (
+        options.worker &&
+        payload.assignee &&
+        payload.assignee !== options.worker
+      ) {
+        setMessage(
+          `指定行（${target}）は他の作業者「${payload.assignee}」の担当のため開けません。`,
+          "error"
+        );
+        return;
+      }
+
+      const nextHistory = history.slice(0, historyIndex + 1);
+      nextHistory.push(target);
+      setHistory(nextHistory);
+      setHistoryIndex(nextHistory.length - 1);
+      const idx = queueRows.indexOf(target);
+      if (idx >= 0) setQueueIndex(idx);
+      if (!queueRows.includes(target)) {
+        showToast("現在のキュー外の行です（表示のみ）");
+      }
+      setRowPayload(payload);
+      syncEditsFromPayload(payload);
+      setMessage("");
+    } catch (e) {
+      setMessage(String(e), "error");
     }
-    loadRow(target, options).catch((e) => setMessage(String(e), "error"));
   };
 
   const saveAndNext = async () => {
@@ -416,18 +439,7 @@ export function WorkApp() {
                   void updateDisplayOption("lightBlueOnly", e.target.checked)
                 }
               />
-              Wiki確認対象行のみ
-            </label>
-            <label className={styles.check}>
-              <input
-                type="checkbox"
-                checked={options.showEmptyFromAc}
-                disabled={options.fullEditMode}
-                onChange={(e) =>
-                  void updateDisplayOption("showEmptyFromAc", e.target.checked)
-                }
-              />
-              空の列も表示する
+              Wiki確認対象列のみ
             </label>
             <label className={styles.check}>
               <input

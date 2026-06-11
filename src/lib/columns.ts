@@ -329,10 +329,9 @@ export function wikiTripletDisplayState(
 
 /**
  * AC 以降の作業列を表示するか。
- * - 水色列のみ / 空列も表示 は options で制御
- * - Wiki 三つ組: Wiki が `-` なら三つ組全体を非表示
- * - 名称が空の三つ組は showEmptyFromAc で表示
- * - active 三つ組の空セルも showEmptyFromAc で表示
+ * - 水色列のみ は options.lightBlueOnly で制御
+ * - 空セルの列は非表示
+ * - Wiki 三つ組: active（名称あり・Wiki が `-` 以外）かつ値ありのみ表示
  */
 export function shouldIncludeWorkColumn(
   rawHeader: string,
@@ -340,10 +339,9 @@ export function shouldIncludeWorkColumn(
   rowByUnique: Record<string, string>,
   headerMap: Record<string, string>,
   colIndex: number,
-  options: Pick<WorkOptions, "showEmptyFromAc" | "lightBlueOnly">
+  options: Pick<WorkOptions, "lightBlueOnly">
 ): boolean {
   const lightBlueOnly = options.lightBlueOnly !== false;
-  const showEmptyFromAc = options.showEmptyFromAc;
 
   if (lightBlueOnly && !isLightBlueWorkColumn(rawHeader, colIndex)) return false;
   if (isMemoWorkColumn(rawHeader)) return false;
@@ -357,14 +355,11 @@ export function shouldIncludeWorkColumn(
       rowByUnique,
       headerMap
     );
-    if (state === "wiki_dash") return false;
-    if (state === "empty_name") return showEmptyFromAc;
-    if (!isCellEmpty(rowByUnique[uniqueName])) return true;
-    return showEmptyFromAc;
+    if (state !== "active") return false;
+    return !isCellEmpty(rowByUnique[uniqueName]);
   }
 
-  if (isCellEmpty(rowByUnique[uniqueName]) && !showEmptyFromAc) return false;
-  return true;
+  return !isCellEmpty(rowByUnique[uniqueName]);
 }
 
 function expandWikiTripletColumns(
@@ -424,7 +419,7 @@ export function workDisplayColumns(
   rowByUnique: Record<string, string>,
   rawHeaders: string[],
   uniqueHeaders: string[],
-  options: Pick<WorkOptions, "showEmptyFromAc" | "lightBlueOnly" | "fullEditMode">
+  options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode">
 ): string[] {
   const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
   const cols: string[] = [];
@@ -656,16 +651,22 @@ export function buildRowPayload(
   rawHeaders: string[],
   uniqueHeaders: string[],
   sheetRowNumber: number,
-  options: Pick<WorkOptions, "showEmptyFromAc" | "lightBlueOnly" | "fullEditMode">
+  options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode">
 ) {
   const fullEditMode = options.fullEditMode === true;
   let workCols = workDisplayColumns(rowByUnique, rawHeaders, uniqueHeaders, options);
   if (!fullEditMode) {
     workCols = ensureWorkDisplayCols(workCols, rawHeaders, uniqueHeaders);
   }
+  const assigneeUnique = resolveWorkAssigneeUnique(rawHeaders, uniqueHeaders);
+  const assignee =
+    assigneeUnique && assigneeUnique in rowByUnique
+      ? String(rowByUnique[assigneeUnique] ?? "").trim()
+      : "";
   return {
     sheetRowNumber,
     summary: rowSummary(rowByUnique, sheetRowNumber),
+    assignee,
     columns: buildColumnPayload(
       rowByUnique,
       workCols,

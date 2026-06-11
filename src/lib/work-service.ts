@@ -138,7 +138,7 @@ export async function getQueue(options: WorkOptions): Promise<number[]> {
 
 export async function getRow(
   sheetRowNumber: number,
-  options: Pick<WorkOptions, "showEmptyFromAc" | "lightBlueOnly" | "fullEditMode">
+  options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode">
 ): Promise<RowPayload> {
   const structure = await ensureStructure();
   let rowValues = getRowValues(sheetRowNumber);

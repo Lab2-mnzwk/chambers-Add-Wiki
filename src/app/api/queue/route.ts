@@ -10,7 +10,6 @@ function parseOptions(searchParams: URLSearchParams): WorkOptions {
       "自分担当") as WorkOptions["queueFilter"],
     skipDone: searchParams.get("skipDone") !== "false",
     lightBlueOnly: searchParams.get("lightBlueOnly") !== "false",
-    showEmptyFromAc: searchParams.get("showEmptyFromAc") === "true",
     fullEditMode: searchParams.get("fullEditMode") === "true",
     indexRows: Number(searchParams.get("indexRows") ?? 10000),
   };
