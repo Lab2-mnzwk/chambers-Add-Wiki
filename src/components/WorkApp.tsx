@@ -11,7 +11,7 @@ import type {
   WorkOptions,
 } from "@/lib/types";
 import { applyTheme, loadThemeMode, type ThemeMode } from "@/lib/theme";
-import { ASSIGN_ALL_ROWS_NAME, STATUS_DONE } from "@/lib/config";
+import { ASSIGN_ALL_ROWS_NAME } from "@/lib/config";
 
 const PREFS_KEY = "wikiWorkNext";
 
@@ -60,7 +60,6 @@ export function WorkApp() {
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [rowPayload, setRowPayload] = useState<RowPayload | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
-  const [doneRows, setDoneRows] = useState<Set<number>>(new Set());
   const [status, setStatus] = useState("");
   const [statusKind, setStatusKind] = useState<"" | "ok" | "error">("");
   const [loading, setLoading] = useState(false);
@@ -238,7 +237,8 @@ export function WorkApp() {
     if (historyIndex <= 0) return;
     let nextIndex = historyIndex - 1;
     if (options.skipDone) {
-      while (nextIndex >= 0 && doneRows.has(history[nextIndex])) {
+      // 最新キュー（patch 反映済みキャッシュ由来）に存在しない行＝完了/対象外として戻り時もスキップ。
+      while (nextIndex >= 0 && !queueRows.includes(history[nextIndex])) {
         nextIndex -= 1;
       }
       if (nextIndex < 0) {
@@ -302,11 +302,6 @@ export function WorkApp() {
     if (!currentRow || loading) return;
     setLoading(true);
     setMessage("保存中…");
-    const statusCol = rowPayload?.columns.find((c) => c.isStatus);
-    const savedStatus = statusCol
-      ? edits[statusCol.uniqueName] ?? statusCol.value
-      : "";
-    const savedRow = currentRow;
     try {
       const res = await fetch("/api/save", {
         method: "POST",
@@ -322,12 +317,9 @@ export function WorkApp() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "保存に失敗");
 
-      setDoneRows((prev) => {
-        const next = new Set(prev);
-        if (savedStatus.trim() === STATUS_DONE) next.add(savedRow);
-        else next.delete(savedRow);
-        return next;
-      });
+      // patch 反映後の最新キューでクライアントの基準を更新（次/前の判定を統一）。
+      const nextQueueRows = (data.queueSheetRows ?? queueRows) as number[];
+      setQueueRows(nextQueueRows);
 
       if (data.nextSheetRowNumber) {
         setMessage(`${data.savedCells} セルを保存しました。`, "ok");
@@ -336,7 +328,7 @@ export function WorkApp() {
         nextHistory.push(next);
         setHistory(nextHistory);
         setHistoryIndex(nextHistory.length - 1);
-        const idx = queueRows.indexOf(next);
+        const idx = nextQueueRows.indexOf(next);
         if (idx >= 0) setQueueIndex(idx);
         await loadRow(next, options);
       } else {

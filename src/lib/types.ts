@@ -78,4 +78,6 @@ export type SaveResult = {
   savedCells: number;
   nextSheetRowNumber: number | null;
   atEnd: boolean;
+  /** patch 反映後のキャッシュから再計算した最新キュー（行番号昇順） */
+  queueSheetRows: number[];
 };

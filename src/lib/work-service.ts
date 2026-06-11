@@ -215,16 +215,22 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
     patchQueueIndex(payload.sheetRowNumber, updates[statusUnique], "");
   }
 
-  const currentIndex = payload.queueSheetRows.indexOf(payload.sheetRowNumber);
+  // patch 反映後のキャッシュから最新キューを再計算（シート I/O なし）。
+  // skipDone 有効時は完了行が除外されるため、次の行・前の行判定の単一の基準になる。
+  const records = hasQueueIndex(payload.options.indexRows) ? loadQueueIndex() : null;
+  const queueSheetRows = records
+    ? filterQueueRows(records, payload.options)
+    : payload.queueSheetRows;
+
+  // 現在行より後ろの最初の行（=次の未完了行）。queueSheetRows は行番号昇順。
   const nextSheetRowNumber =
-    currentIndex >= 0 && currentIndex + 1 < payload.queueSheetRows.length
-      ? payload.queueSheetRows[currentIndex + 1]
-      : null;
+    queueSheetRows.find((r) => r > payload.sheetRowNumber) ?? null;
 
   return {
     savedCells: plan.length,
     nextSheetRowNumber,
     atEnd: nextSheetRowNumber === null,
+    queueSheetRows,
   };
 }
 
