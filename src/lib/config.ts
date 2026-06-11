@@ -22,6 +22,8 @@ export const SPREADSHEET_DISPLAY_TITLE =
 export const SHEET_NAME = "wiki付与作業シート（第一弾）";
 export const ASSIGN_SHEET_NAME = "アサイン";
 export const DISCORD_NAME_COLUMN = "discord名";
+/** アサインシートの discord名 列に含まれる作業者以外の集計ラベル（作業者リストから除外） */
+export const ASSIGN_NAME_EXCLUDE = ["合計", "端数チェック（総件数との差）"];
 
 export const COL_STATUS_WORK = "Status.1";
 export const COL_ASSIGNEE = "Assignee";

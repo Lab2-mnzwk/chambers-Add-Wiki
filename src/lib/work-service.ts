@@ -1,5 +1,4 @@
 import {
-  COL_ASSIGNEE,
   DEFAULT_INDEX_ROWS,
   ENABLE_SHEET_WRITES,
   SHEET_NAME,
@@ -174,9 +173,6 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
     structure.uniqueHeaders,
     fullEditMode
   );
-  if (payload.worker && structure.uniqueHeaders.includes(COL_ASSIGNEE)) {
-    updates[COL_ASSIGNEE] = payload.worker;
-  }
 
   const plan = buildWritePlan(
     payload.sheetRowNumber,
@@ -216,13 +212,7 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
 
   const statusUnique = rowPayload.columns.find((c) => c.isStatus)?.uniqueName;
   if (statusUnique && updates[statusUnique] !== undefined) {
-    patchQueueIndex(
-      payload.sheetRowNumber,
-      updates[statusUnique],
-      updates[COL_ASSIGNEE] ?? ""
-    );
-  } else if (updates[COL_ASSIGNEE]) {
-    patchQueueIndex(payload.sheetRowNumber, "", updates[COL_ASSIGNEE]);
+    patchQueueIndex(payload.sheetRowNumber, updates[statusUnique], "");
   }
 
   const currentIndex = payload.queueSheetRows.indexOf(payload.sheetRowNumber);
