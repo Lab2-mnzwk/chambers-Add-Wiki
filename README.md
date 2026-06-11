@@ -21,7 +21,10 @@ npm run dev
 
 ## 認証
 
-次のいずれか（優先順）:
+**Google OAuth（推奨）** — [docs/OAUTH.md](docs/OAUTH.md)  
+`.env.local` に `AUTH_SECRET` / `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` を設定。各作業者の Google アカウントにシート編集権限が必要です。
+
+**サービスアカウント（従来・ローカル向け）** — OAuth 3 変数が未設定のとき自動で使用:
 
 1. `.env.local` の `GOOGLE_SERVICE_ACCOUNT_JSON`（JSON 全文）
 2. `.env.local` の `GOOGLE_APPLICATION_CREDENTIALS`（ファイルパス）

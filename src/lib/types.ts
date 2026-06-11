@@ -38,7 +38,12 @@ export type ColumnPayload = {
   isMemo: boolean;
   isWiki: boolean;
   isWikiEdit: boolean;
+  isWikiName: boolean;
   isLeading: boolean;
+  /** 正しいwiki 列用: 対応する name 列の値 */
+  tripletName: string;
+  /** 正しいwiki 列用: 対応する wiki 列の値 */
+  tripletWiki: string;
 };
 
 export type RowPayload = {
@@ -48,6 +53,9 @@ export type RowPayload = {
 };
 
 export type BootstrapPayload = {
+  authMode: "oauth" | "service_account";
+  authRequired: boolean;
+  userEmail: string | null;
   spreadsheetTitle: string;
   sheetName: string;
   sheetUrl: string;

@@ -21,14 +21,13 @@ export const WORK_STATUS_OPTIONS = [
   STATUS_NEEDS_REVIEW,
 ] as const;
 
-export const LEADING_FIXED_HEADERS = [
-  "head_page",
-  "tail_page",
-  "通し番号",
-  "連番",
-  "STARTDATE",
-  "ENDDATE",
+export const LEADING_COLUMN_PAIRS = [
+  ["head_page", "tail_page"],
+  ["通し番号", "連番"],
+  ["STARTDATE", "ENDDATE"],
 ] as const;
+
+export const LEADING_FIXED_HEADERS = LEADING_COLUMN_PAIRS.flat();
 
 export const WORK_TABLE_START_HEADER = "ENTITY_NAME";
 export const WORK_STATUS_COL_LETTER = "FG";

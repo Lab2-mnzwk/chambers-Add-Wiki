@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { AuthProvider } from "@/components/AuthProvider";
 import { ThemeInit } from "@/components/ThemeInit";
 import "./globals.css";
 
@@ -14,7 +15,7 @@ export default function RootLayout({
     <html lang="ja" suppressHydrationWarning>
       <body>
         <ThemeInit />
-        {children}
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );

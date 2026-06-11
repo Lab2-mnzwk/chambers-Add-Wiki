@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 import { cacheStats, refreshCache } from "@/lib/work-service";
 
 export async function DELETE() {
@@ -6,8 +7,7 @@ export async function DELETE() {
     await refreshCache();
     return NextResponse.json({ ok: true, stats: cacheStats() });
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return apiErrorResponse(e);
   }
 }
 

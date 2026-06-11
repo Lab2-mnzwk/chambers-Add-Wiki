@@ -20,6 +20,19 @@ git push origin main
 4. Root Directory: **`.`**（リポジトリ直下）
 5. **Environment Variables** を追加:
 
+**OAuth 利用（推奨・作業者の Google アカウント）** — [docs/OAUTH.md](./OAUTH.md)
+
+| Name | Value |
+|------|-------|
+| `AUTH_SECRET` | ランダム文字列 |
+| `AUTH_URL` | `https://<your-vercel-domain>` |
+| `GOOGLE_CLIENT_ID` | OAuth クライアント ID |
+| `GOOGLE_CLIENT_SECRET` | OAuth クライアント Secret |
+| `SPREADSHEET_ID` | 対象スプレッドシート ID |
+| `ENABLE_SHEET_WRITES` | `true` |
+
+**サービスアカウント利用（従来）** — OAuth 3 変数を **設定しない** 場合
+
 | Name | Value |
 |------|-------|
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | サービスアカウント JSON の**全文**（1行） |
@@ -31,7 +44,8 @@ git push origin main
 ## 3. 作業者への共有
 
 - Vercel の Production URL（例: `https://chambers-add-wiki.vercel.app`）を共有
-- スプレッドシートは引き続きサービスアカウントに **編集者** 共有
+- **OAuth 時:** 各作業者の Google アカウントにスプレッドシート **編集者** 共有
+- **サービスアカウント時:** SA に編集者共有（従来）
 
 ## 注意
 

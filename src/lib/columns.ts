@@ -16,8 +16,10 @@ import {
 } from "./config";
 
 import type { ColumnPayload, WorkOptions } from "./types";
+import { tripletValuesForOkHeader } from "./wiki-history";
 
 const LEADING = LEADING_FIXED_HEADERS;
+const WIKI_NAME_HEADERS = new Set(WIKI_TRIPLET_RULES.map(([name]) => name));
 
 export function columnLetter(colIndex: number): string {
   let letter = "";
@@ -77,6 +79,11 @@ export function isWorkStatusColumn(rawHeader: string, colIndex: number): boolean
 
 export function isCorrectWikiHeader(rawHeader: string): boolean {
   return rawHeader.includes("正しいwiki");
+}
+
+/** Wiki 三つ組の名称列（A_name1, Pl_name1 等） */
+export function isWikiNameHeader(rawHeader: string): boolean {
+  return WIKI_NAME_HEADERS.has(rawHeader);
 }
 
 export function isLightBlueWorkColumn(rawHeader: string, colIndex: number): boolean {
@@ -408,6 +415,9 @@ export function buildColumnPayload(
     const isStatus = isWorkStatusColumn(rawHeader, colIndex);
     let editValue = isCellEmpty(value) ? "" : String(value);
     if (isStatus) editValue = normalizeWorkStatus(value);
+    const triplet = isCorrectWikiHeader(rawHeader)
+      ? tripletValuesForOkHeader(rawHeader, rowByUnique, rawHeaders, uniqueHeaders)
+      : null;
 
     return {
       uniqueName,
@@ -420,7 +430,10 @@ export function buildColumnPayload(
       isMemo: isMemoWorkColumn(rawHeader),
       isWiki: isWikiStyleHeader(rawHeader) && !isMemoWorkColumn(rawHeader),
       isWikiEdit: isCorrectWikiHeader(rawHeader),
+      isWikiName: isWikiNameHeader(rawHeader),
       isLeading: (LEADING as readonly string[]).includes(rawHeader),
+      tripletName: triplet?.name ?? "",
+      tripletWiki: triplet?.wiki ?? "",
     };
   });
 }

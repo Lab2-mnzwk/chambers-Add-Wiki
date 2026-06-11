@@ -33,6 +33,40 @@
   padding: 8px 6px;
 }
 
+.leadingBlock {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.leadingPair {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.leadingStacked {
+  width: 86px;
+  flex-basis: 86px;
+  min-height: 0;
+  padding: 6px 6px;
+}
+
+.leadingStacked .header {
+  font-size: 12px;
+  margin: 2px 0 4px;
+}
+
+.leadingStacked .readonly {
+  font-size: 14px;
+}
+
+.leadingStacked .letter {
+  font-size: 12px;
+}
+
 .wiki {
   background: var(--work-col-wiki-bg);
   border-color: var(--work-col-wiki-border);
@@ -75,6 +109,18 @@
   color: var(--work-link);
   text-decoration: underline;
   word-break: break-all;
+}
+
+.googleSearch {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.googleSearch:hover {
+  text-decoration: underline;
 }
 
 .linkPreview {

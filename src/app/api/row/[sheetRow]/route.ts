@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 import { getRow } from "@/lib/work-service";
 
 export async function GET(
@@ -21,7 +22,6 @@ export async function GET(
     });
     return NextResponse.json(payload);
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return apiErrorResponse(e);
   }
 }

@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { SPREADSHEET_ID } from "./config";
 import type { SheetStructure } from "./types";
+import type { WikiHistoryIndex } from "./wiki-history";
 
 export type QueueRecord = {
   sheetRowNumber: number;
@@ -15,6 +16,7 @@ type CacheBundle = {
   indexRows: number;
   queueIndex: QueueRecord[];
   rows: Record<string, string[]>;
+  wikiHistory: WikiHistoryIndex | null;
 };
 
 function cacheDir(): string {
@@ -39,7 +41,7 @@ function cacheFile(): string {
 function readBundle(): CacheBundle {
   const file = cacheFile();
   if (!fs.existsSync(file)) {
-    return { structure: null, indexRows: 0, queueIndex: [], rows: {} };
+    return { structure: null, indexRows: 0, queueIndex: [], rows: {}, wikiHistory: null };
   }
   return JSON.parse(fs.readFileSync(file, "utf8")) as CacheBundle;
 }
@@ -56,11 +58,13 @@ export function clearCache(): void {
 export function cacheStats(): {
   indexRowsCached: number;
   dataRowsCached: number;
+  wikiHistoryEntries: number;
 } {
   const bundle = readBundle();
   return {
     indexRowsCached: bundle.queueIndex.length,
     dataRowsCached: Object.keys(bundle.rows).length,
+    wikiHistoryEntries: bundle.wikiHistory?.entries.length ?? 0,
   };
 }
 
@@ -127,5 +131,20 @@ export function patchQueueIndex(
   if (!row) return;
   if (status) row.status = status;
   if (assignee) row.assignee = assignee;
+  writeBundle(bundle);
+}
+
+export function getWikiHistory(): WikiHistoryIndex | null {
+  return readBundle().wikiHistory;
+}
+
+export function hasWikiHistory(indexRows: number): boolean {
+  const history = readBundle().wikiHistory;
+  return Boolean(history && history.indexRows === indexRows);
+}
+
+export function saveWikiHistory(index: WikiHistoryIndex): void {
+  const bundle = readBundle();
+  bundle.wikiHistory = index;
   writeBundle(bundle);
 }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 import { getQueue } from "@/lib/work-service";
 import type { WorkOptions } from "@/lib/types";
 
@@ -20,7 +21,6 @@ export async function GET(request: NextRequest) {
     const sheetRows = await getQueue(options);
     return NextResponse.json({ sheetRows });
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return apiErrorResponse(e);
   }
 }

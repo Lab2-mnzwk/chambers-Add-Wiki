@@ -7,6 +7,7 @@ import {
   WORK_STATUS_OPTIONS,
   workSheetEditUrl,
 } from "./config";
+import { auth, isOAuthConfigured } from "@/auth";
 import {
   buildRowPayload,
   buildWritePlan,
@@ -18,6 +19,7 @@ import {
   executeWritePlan,
   fetchQueueIndex,
   fetchRowValues,
+  fetchWikiHistoryFromSheet,
   loadAssignDiscordNames,
   loadSheetStructure,
 } from "./sheets";
@@ -26,12 +28,15 @@ import {
   clearCache,
   getRowValues,
   getStructure,
+  getWikiHistory,
   hasQueueIndex,
+  hasWikiHistory,
   loadQueueIndex,
   patchQueueIndex,
   patchRowValues,
   saveQueueIndex,
   saveRowValues,
+  saveWikiHistory,
   setStructure,
 } from "./store";
 import type {
@@ -42,6 +47,13 @@ import type {
   SheetStructure,
   WorkOptions,
 } from "./types";
+import {
+  aggregateWikiHistory,
+  mergeWikiHistoryFromSave,
+  suggestWikiHistory,
+  type WikiHistoryIndex,
+  type WikiHistorySuggestion,
+} from "./wiki-history";
 
 export { clearCache, cacheStats };
 
@@ -54,10 +66,52 @@ async function ensureStructure(): Promise<SheetStructure> {
   return structure;
 }
 
+export async function ensureWikiHistory(indexRows: number): Promise<WikiHistoryIndex> {
+  if (hasWikiHistory(indexRows)) {
+    return getWikiHistory()!;
+  }
+  const structure = await ensureStructure();
+  const raw = await fetchWikiHistoryFromSheet(structure, indexRows);
+  const index = aggregateWikiHistory(raw, indexRows);
+  saveWikiHistory(index);
+  return index;
+}
+
+export async function getWikiHistorySuggestions(
+  name: string,
+  wiki: string,
+  query: string,
+  indexRows: number
+): Promise<WikiHistorySuggestion[]> {
+  const index = await ensureWikiHistory(indexRows);
+  return suggestWikiHistory(index, name, wiki, query);
+}
+
 export async function getBootstrap(): Promise<BootstrapPayload> {
+  const oauth = isOAuthConfigured();
+  const session = oauth ? await auth() : null;
+
+  if (oauth && !session?.user) {
+    return {
+      authMode: "oauth",
+      authRequired: true,
+      userEmail: null,
+      spreadsheetTitle: SPREADSHEET_DISPLAY_TITLE,
+      sheetName: SHEET_NAME,
+      sheetUrl: workSheetEditUrl(),
+      discordNames: [],
+      statusOptions: [...WORK_STATUS_OPTIONS],
+      defaultIndexRows: DEFAULT_INDEX_ROWS,
+      enableWrites: ENABLE_SHEET_WRITES,
+    };
+  }
+
   await ensureStructure();
   const discordNames = await loadAssignDiscordNames();
   return {
+    authMode: oauth ? "oauth" : "service_account",
+    authRequired: false,
+    userEmail: session?.user?.email ?? null,
     spreadsheetTitle: SPREADSHEET_DISPLAY_TITLE,
     sheetName: SHEET_NAME,
     sheetUrl: workSheetEditUrl(),
@@ -135,6 +189,27 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
 
   await executeWritePlan(plan);
   patchRowValues(payload.sheetRowNumber, structure.uniqueHeaders, updates);
+
+  const updatedValues = getRowValues(payload.sheetRowNumber);
+  if (updatedValues) {
+    const mergedRow = rowByUniqueFromValues(structure.uniqueHeaders, updatedValues);
+    let history = getWikiHistory();
+    if (!history || history.indexRows !== payload.options.indexRows) {
+      history = {
+        indexRows: payload.options.indexRows,
+        builtAt: Date.now(),
+        entries: [],
+      };
+    }
+    history = mergeWikiHistoryFromSave(
+      history,
+      mergedRow,
+      structure.rawHeaders,
+      structure.uniqueHeaders,
+      new Set(Object.keys(updates))
+    );
+    saveWikiHistory(history);
+  }
 
   const statusUnique = rowPayload.columns.find((c) => c.isStatus)?.uniqueName;
   if (statusUnique && updates[statusUnique] !== undefined) {

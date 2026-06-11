@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { signOut, useSession } from "next-auth/react";
 import styles from "./WorkApp.module.css";
+import { LoginPanel } from "./LoginPanel";
 import { WorkRowTable } from "./WorkRowTable";
 import type {
   BootstrapPayload,
@@ -39,6 +41,7 @@ function rowQuery(options: WorkOptions): string {
 }
 
 export function WorkApp() {
+  const { data: session, status: sessionStatus } = useSession();
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
   const [options, setOptions] = useState<WorkOptions>(defaultOptions);
   const [queueRows, setQueueRows] = useState<number[]>([]);
@@ -156,6 +159,7 @@ export function WorkApp() {
   }, [themeMode]);
 
   useEffect(() => {
+    if (sessionStatus === "loading") return;
     loadPrefs();
     fetch("/api/bootstrap")
       .then((r) => r.json())
@@ -164,10 +168,12 @@ export function WorkApp() {
         setBootstrap(data as BootstrapPayload);
       })
       .catch((e) => setMessage(String(e), "error"));
-  }, [loadPrefs]);
+  }, [loadPrefs, sessionStatus, session?.user?.email]);
 
   useEffect(() => {
-    if (!bootstrap?.discordNames.length) return;
+    if (!bootstrap || bootstrap.authRequired || !bootstrap.discordNames.length) {
+      return;
+    }
     setOptions((prev) => {
       if (prev.worker && bootstrap.discordNames.includes(prev.worker)) {
         return prev;
@@ -179,7 +185,7 @@ export function WorkApp() {
   }, [bootstrap, savePrefs]);
 
   useEffect(() => {
-    if (!bootstrap) return;
+    if (!bootstrap || bootstrap.authRequired) return;
     if (
       !options.worker &&
       (options.queueFilter === "自分担当" ||
@@ -286,6 +292,27 @@ export function WorkApp() {
     await loadQueue(options, true);
   };
 
+  if (bootstrap?.authRequired) {
+    return (
+      <div className={styles.page}>
+        <header className={styles.header}>
+          <div>
+            <h1 className={styles.title}>PJ140 Wiki付与</h1>
+            <p className={styles.meta}>
+              {`${bootstrap.spreadsheetTitle} / ${bootstrap.sheetName}`}
+            </p>
+          </div>
+        </header>
+        {session?.error && (
+          <p className={styles.statusError}>
+            Google 認証の有効期限が切れました。再度ログインしてください。
+          </p>
+        )}
+        <LoginPanel sheetUrl={bootstrap.sheetUrl} />
+      </div>
+    );
+  }
+
   return (
     <div className={styles.page}>
       <header className={styles.header}>
@@ -299,16 +326,30 @@ export function WorkApp() {
               : "読み込み中…"}
           </p>
         </div>
-        {bootstrap && (
-          <a
-            className={styles.sheetLink}
-            href={bootstrap.sheetUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            作業シートを開く ↗
-          </a>
-        )}
+        <div className={styles.headerActions}>
+          {bootstrap?.authMode === "oauth" && bootstrap.userEmail && (
+            <div className={styles.userBlock}>
+              <span className={styles.userEmail}>{bootstrap.userEmail}</span>
+              <button
+                type="button"
+                className={styles.secondary}
+                onClick={() => signOut({ callbackUrl: "/" })}
+              >
+                ログアウト
+              </button>
+            </div>
+          )}
+          {bootstrap && (
+            <a
+              className={styles.sheetLink}
+              href={bootstrap.sheetUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              作業シートを開く ↗
+            </a>
+          )}
+        </div>
       </header>
 
       <div className={styles.layout}>
@@ -441,6 +482,7 @@ export function WorkApp() {
               <WorkRowTable
                 columns={rowPayload.columns}
                 edits={edits}
+                indexRows={options.indexRows}
                 onEdit={(uniqueName, value) =>
                   setEdits((prev) => ({ ...prev, [uniqueName]: value }))
                 }
