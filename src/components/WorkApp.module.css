@@ -148,11 +148,6 @@
     padding: 10px;
   }
 
-  .settingsTitle {
-    margin-bottom: 8px;
-    font-size: 13px;
-  }
-
   .label {
     margin: 6px 0 2px;
   }
@@ -176,11 +171,6 @@
   top: 8px;
   max-height: calc(100vh - 24px);
   overflow-y: auto;
-}
-
-.settingsTitle {
-  margin: 0 0 10px;
-  font-size: 14px;
 }
 
 .settingsPrimary {

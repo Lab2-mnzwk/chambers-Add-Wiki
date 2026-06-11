@@ -357,8 +357,6 @@ export function WorkApp() {
 
       <div className={styles.layout}>
         <aside className={styles.settings}>
-          <h2 className={styles.settingsTitle}>作業設定</h2>
-
           <div className={styles.settingsPrimary}>
             <label className={styles.label}>作業者名（Discord名）</label>
             <select
@@ -375,7 +373,7 @@ export function WorkApp() {
               ))}
             </select>
 
-            <label className={styles.label}>対象行</label>
+            <label className={styles.label}>表示対象行</label>
             <select
               value={options.queueFilter}
               onChange={(e) =>
