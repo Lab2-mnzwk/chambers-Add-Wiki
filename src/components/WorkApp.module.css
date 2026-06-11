@@ -13,6 +13,26 @@
   margin-bottom: 14px;
 }
 
+.headerMain {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.metaDesktop {
+  display: block;
+}
+
+.metaCompact {
+  display: none;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.sheetLinkDesktop {
+  display: inline;
+}
+
 .title {
   margin: 0 0 4px;
   font-size: 22px;
@@ -67,6 +87,99 @@
   .layout {
     grid-template-columns: 1fr;
   }
+
+  .page {
+    padding: 10px 12px 24px;
+  }
+
+  .header {
+    flex-wrap: nowrap;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  .headerMain {
+    flex: 1 1 auto;
+  }
+
+  .title {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    font-size: 17px;
+    line-height: 1.25;
+  }
+
+  .metaDesktop,
+  .sheetLinkDesktop {
+    display: none;
+  }
+
+  .headerActions {
+    flex: 0 0 auto;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+  }
+
+  .userBlock {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+  }
+
+  .userEmail {
+    max-width: 140px;
+    font-size: 11px;
+  }
+
+  .secondary {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .metaCompact {
+    display: block;
+  }
+
+  .settings {
+    position: static;
+    max-height: none;
+    padding: 10px;
+  }
+
+  .settingsTitle {
+    margin-bottom: 8px;
+    font-size: 13px;
+  }
+
+  .settingsMoreToggle {
+    display: block;
+  }
+
+  .settingsMore {
+    display: none;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-panel);
+  }
+
+  .settingsMoreOpen {
+    display: block;
+  }
+
+  .label {
+    margin: 6px 0 2px;
+  }
+
+  .check {
+    margin: 4px 0;
+    font-size: 12px;
+  }
+
+  .summary {
+    font-size: 16px;
+  }
 }
 
 .settings {
@@ -83,6 +196,39 @@
 .settingsTitle {
   margin: 0 0 10px;
   font-size: 14px;
+}
+
+.settingsPrimary {
+  display: flex;
+  flex-direction: column;
+}
+
+.settingsMoreToggle {
+  display: none;
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-panel);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.settingsMoreIcon {
+  float: right;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.settingsMore {
+  display: block;
+}
+
+.settingsMoreOpen {
+  display: block;
 }
 
 .label {

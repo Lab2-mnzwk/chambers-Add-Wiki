@@ -67,6 +67,7 @@ npm run dev
 
 | 症状 | 対処 |
 |------|------|
+| `Invalid URL`（キュー再読込等） | Vercel の `SPREADSHEET_ID` を確認。**ID のみ**（`1Mc3pX949vlO_...`）または URL 可。空文字は不可。変更後 **Redeploy** |
 | redirect_uri_mismatch | Cloud Console のリダイレクト URI と `AUTH_URL` を一致させる |
 | 500 / Internal Server Error | ポート占有 or `.next` 破損。下記「dev 再起動」を実行 |
 | `MissingSecret` | `AUTH_SECRET` を設定し dev サーバーを再起動 |

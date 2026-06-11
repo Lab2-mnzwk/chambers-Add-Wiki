@@ -1,5 +1,21 @@
-export const SPREADSHEET_ID =
-  process.env.SPREADSHEET_ID ?? "1Mc3pX949vlO_uxWpimn7_DsUAYr87GmroqXft6fvB4I";
+const DEFAULT_SPREADSHEET_ID = "1Mc3pX949vlO_uxWpimn7_DsUAYr87GmroqXft6fvB4I";
+
+/** 環境変数から ID を取り出す（URL 貼り付け・空文字にも対応） */
+export function resolveSpreadsheetId(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (!trimmed) return DEFAULT_SPREADSHEET_ID;
+
+  const fromUrl = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/)?.[1];
+  if (fromUrl) return fromUrl;
+
+  if (/^[a-zA-Z0-9-_]{20,}$/.test(trimmed)) return trimmed;
+
+  throw new Error(
+    "SPREADSHEET_ID が不正です。ID のみ（例: 1Mc3pX949vlO_...）か Google スプレッドシート URL を設定してください。"
+  );
+}
+
+export const SPREADSHEET_ID = resolveSpreadsheetId(process.env.SPREADSHEET_ID);
 /** 画面上部に表示するスプレッドシート名（API のファイル名とは別に固定可） */
 export const SPREADSHEET_DISPLAY_TITLE =
   process.env.SPREADSHEET_DISPLAY_TITLE ?? "PJ140_wiki付与_view_test";

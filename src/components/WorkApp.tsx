@@ -55,6 +55,7 @@ export function WorkApp() {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState("");
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
+  const [moreSettingsOpen, setMoreSettingsOpen] = useState(false);
 
   const currentRow = useMemo(() => {
     if (historyIndex >= 0 && history[historyIndex]) return history[historyIndex];
@@ -298,7 +299,7 @@ export function WorkApp() {
         <header className={styles.header}>
           <div>
             <h1 className={styles.title}>PJ140 Wiki付与</h1>
-            <p className={styles.meta}>
+            <p className={`${styles.meta} ${styles.metaDesktop}`}>
               {`${bootstrap.spreadsheetTitle} / ${bootstrap.sheetName}`}
             </p>
           </div>
@@ -316,9 +317,9 @@ export function WorkApp() {
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <div>
+        <div className={styles.headerMain}>
           <h1 className={styles.title}>PJ140 Wiki付与</h1>
-          <p className={styles.meta}>
+          <p className={`${styles.meta} ${styles.metaDesktop}`}>
             {bootstrap
               ? `${bootstrap.spreadsheetTitle} / ${bootstrap.sheetName}${
                   bootstrap.enableWrites ? "" : "（書き込み OFF）"
@@ -327,7 +328,7 @@ export function WorkApp() {
           </p>
         </div>
         <div className={styles.headerActions}>
-          {bootstrap?.authMode === "oauth" && bootstrap.userEmail && (
+          {bootstrap?.authMode === "oauth" && bootstrap.userEmail ? (
             <div className={styles.userBlock}>
               <span className={styles.userEmail}>{bootstrap.userEmail}</span>
               <button
@@ -338,10 +339,12 @@ export function WorkApp() {
                 ログアウト
               </button>
             </div>
+          ) : (
+            <p className={styles.metaCompact}>読み込み中…</p>
           )}
           {bootstrap && (
             <a
-              className={styles.sheetLink}
+              className={`${styles.sheetLink} ${styles.sheetLinkDesktop}`}
               href={bootstrap.sheetUrl}
               target="_blank"
               rel="noopener noreferrer"
@@ -356,102 +359,126 @@ export function WorkApp() {
         <aside className={styles.settings}>
           <h2 className={styles.settingsTitle}>作業設定</h2>
 
-          <label className={styles.label}>表示テーマ</label>
-          <select
-            value={themeMode}
-            onChange={(e) => setThemeMode(e.target.value as ThemeMode)}
-          >
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-            <option value="system">System</option>
-          </select>
+          <div className={styles.settingsPrimary}>
+            <label className={styles.label}>作業者名（Discord名）</label>
+            <select
+              value={options.worker}
+              onChange={(e) => updateOption("worker", e.target.value)}
+            >
+              {(bootstrap?.discordNames.length
+                ? bootstrap.discordNames
+                : ["（読込中）"]
+              ).map((name) => (
+                <option key={name} value={name === "（読込中）" ? "" : name}>
+                  {name}
+                </option>
+              ))}
+            </select>
 
-          <label className={styles.label}>作業者名（Discord名）</label>
-          <select
-            value={options.worker}
-            onChange={(e) => updateOption("worker", e.target.value)}
-          >
-            {(bootstrap?.discordNames.length
-              ? bootstrap.discordNames
-              : ["（読込中）"]
-            ).map((name) => (
-              <option key={name} value={name === "（読込中）" ? "" : name}>
-                {name}
-              </option>
-            ))}
-          </select>
-
-          <label className={styles.label}>対象行</label>
-          <select
-            value={options.queueFilter}
-            onChange={(e) =>
-              updateOption("queueFilter", e.target.value as QueueFilter)
-            }
-          >
-            <option value="未担当＋自分担当">未担当＋自分担当</option>
-            <option value="未担当">未担当</option>
-            <option value="自分担当">自分担当</option>
-            <option value="すべて">すべて</option>
-          </select>
-
-          <label className={styles.check}>
-            <input
-              type="checkbox"
-              checked={options.skipDone}
-              onChange={(e) => updateOption("skipDone", e.target.checked)}
-            />
-            完了行をスキップ
-          </label>
-          <label className={styles.check}>
-            <input
-              type="checkbox"
-              checked={options.lightBlueOnly}
-              onChange={(e) => updateOption("lightBlueOnly", e.target.checked)}
-            />
-            AC列以降は水色列のみ
-          </label>
-          <label className={styles.check}>
-            <input
-              type="checkbox"
-              checked={options.showEmptyFromAc}
+            <label className={styles.label}>対象行</label>
+            <select
+              value={options.queueFilter}
               onChange={(e) =>
-                updateOption("showEmptyFromAc", e.target.checked)
+                updateOption("queueFilter", e.target.value as QueueFilter)
+              }
+            >
+              <option value="未担当＋自分担当">未担当＋自分担当</option>
+              <option value="未担当">未担当</option>
+              <option value="自分担当">自分担当</option>
+              <option value="すべて">すべて</option>
+            </select>
+
+            <label className={styles.check}>
+              <input
+                type="checkbox"
+                checked={options.skipDone}
+                onChange={(e) => updateOption("skipDone", e.target.checked)}
+              />
+              完了行をスキップ
+            </label>
+            <label className={styles.check}>
+              <input
+                type="checkbox"
+                checked={options.lightBlueOnly}
+                onChange={(e) => updateOption("lightBlueOnly", e.target.checked)}
+              />
+              AC列以降は水色列のみ
+            </label>
+            <label className={styles.check}>
+              <input
+                type="checkbox"
+                checked={options.showEmptyFromAc}
+                onChange={(e) =>
+                  updateOption("showEmptyFromAc", e.target.checked)
+                }
+              />
+              AC列以降の空列も表示
+            </label>
+          </div>
+
+          <button
+            type="button"
+            className={styles.settingsMoreToggle}
+            aria-expanded={moreSettingsOpen}
+            onClick={() => setMoreSettingsOpen((open) => !open)}
+          >
+            その他の設定
+            <span className={styles.settingsMoreIcon} aria-hidden>
+              {moreSettingsOpen ? "▲" : "▼"}
+            </span>
+          </button>
+
+          <div
+            className={
+              moreSettingsOpen
+                ? `${styles.settingsMore} ${styles.settingsMoreOpen}`
+                : styles.settingsMore
+            }
+          >
+            <label className={styles.label}>表示テーマ</label>
+            <select
+              value={themeMode}
+              onChange={(e) => setThemeMode(e.target.value as ThemeMode)}
+            >
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+              <option value="system">System</option>
+            </select>
+
+            <label className={styles.label}>インデックス行数</label>
+            <input
+              type="number"
+              min={100}
+              max={10000}
+              step={100}
+              value={options.indexRows}
+              onChange={(e) =>
+                updateOption("indexRows", Number(e.target.value) || 10000)
               }
             />
-            AC列以降の空列も表示
-          </label>
 
-          <label className={styles.label}>インデックス行数</label>
-          <input
-            type="number"
-            min={100}
-            max={10000}
-            step={100}
-            value={options.indexRows}
-            onChange={(e) =>
-              updateOption("indexRows", Number(e.target.value) || 10000)
-            }
-          />
-
-          <div className={styles.btnRow}>
-            <button
-              type="button"
-              className={styles.secondary}
-              onClick={() =>
-                loadQueue(options, true).catch((e) =>
-                  setMessage(String(e), "error")
-                )
-              }
-            >
-              キュー再読込
-            </button>
-            <button
-              type="button"
-              className={styles.secondary}
-              onClick={() => clearCache().catch((e) => setMessage(String(e), "error"))}
-            >
-              キャッシュクリア
-            </button>
+            <div className={styles.btnRow}>
+              <button
+                type="button"
+                className={styles.secondary}
+                onClick={() =>
+                  loadQueue(options, true).catch((e) =>
+                    setMessage(String(e), "error")
+                  )
+                }
+              >
+                キュー再読込
+              </button>
+              <button
+                type="button"
+                className={styles.secondary}
+                onClick={() =>
+                  clearCache().catch((e) => setMessage(String(e), "error"))
+                }
+              >
+                キャッシュクリア
+              </button>
+            </div>
           </div>
         </aside>
 
