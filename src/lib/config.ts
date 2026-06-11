@@ -24,8 +24,10 @@ export const ASSIGN_SHEET_NAME = "アサイン";
 export const DISCORD_NAME_COLUMN = "discord名";
 /** アサインシートの discord名 列に含まれる作業者以外の集計ラベル（作業者リストから除外） */
 export const ASSIGN_NAME_EXCLUDE = ["合計", "端数チェック（総件数との差）"];
-/** 作業者名の特別値: Assignee で絞らず全行をキューにする */
-export const ASSIGN_ALL_ROWS_NAME = "全体";
+/** 作業者名の特別値: Assignee で絞らず全行をキューにする（ドロップダウン表示名） */
+export const ASSIGN_ALL_ROWS_NAME = "全件表示";
+/** アサインシート上の全件ラベル（表示名 ASSIGN_ALL_ROWS_NAME に変換） */
+export const ASSIGN_ALL_ROWS_SHEET_LABEL = "全体";
 
 export const COL_STATUS_WORK = "Status.1";
 export const COL_ASSIGNEE = "Assignee";

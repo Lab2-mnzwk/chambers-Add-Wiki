@@ -86,7 +86,7 @@ Wiki 三つ組の状態は `wikiTripletDisplayState`: `empty_name` / `wiki_dash`
 - 「アサイン」シートの `discord名` 列（2 行目以降）から重複を除いて取得。
 - 集計ラベルは除外（`ASSIGN_NAME_EXCLUDE`、現状「合計」「端数チェック（総件数との差）」）。
 - 作業者名の選択は **キューの担当フィルタ**であり、通常は選択値と Assignee が一致する行のみが対象。
-- 特別値 **「全体」**（`ASSIGN_ALL_ROWS_NAME`）を選ぶと **Assignee で絞らず全行**をキューにする（`skipDone` は引き続き適用）。この場合、行指定で開く際の担当ガードも無効。
+- 特別値 **「全件表示」**（`ASSIGN_ALL_ROWS_NAME`。シート上のラベル「全体」=`ASSIGN_ALL_ROWS_SHEET_LABEL` を変換）を選ぶと **Assignee で絞らず全行**をキューにする（`skipDone` は引き続き適用）。この場合、行指定で開く際の担当ガードも無効。
 
 ## 実装参照
 

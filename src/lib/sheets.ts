@@ -3,6 +3,8 @@ import { google, sheets_v4 } from "googleapis";
 import path from "path";
 import { isOAuthConfigured } from "@/auth";
 import {
+  ASSIGN_ALL_ROWS_NAME,
+  ASSIGN_ALL_ROWS_SHEET_LABEL,
   ASSIGN_NAME_EXCLUDE,
   ASSIGN_SHEET_NAME,
   COL_ASSIGNEE,
@@ -137,7 +139,8 @@ export async function loadAssignDiscordNames(): Promise<string[]> {
   const seen = new Set<string>();
   const names: string[] = [];
   for (const row of valuesResp.data.values ?? []) {
-    const name = String(row[0] ?? "").trim();
+    const raw = String(row[0] ?? "").trim();
+    const name = raw === ASSIGN_ALL_ROWS_SHEET_LABEL ? ASSIGN_ALL_ROWS_NAME : raw;
     if (name && !seen.has(name) && !excluded.has(name)) {
       seen.add(name);
       names.push(name);
