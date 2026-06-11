@@ -1,6 +1,8 @@
 import {
   COL_ASSIGNEE,
   COL_STATUS_WORK,
+  FULL_EDIT_COLUMN_RANGES,
+  FULL_EDIT_DISPLAY_RANGE,
   LEADING_FIXED_HEADERS,
   LIGHT_BLUE_WORK_HEADERS,
   MEMO_SECTION_BY_HEADER,
@@ -19,6 +21,27 @@ import type { ColumnPayload, WorkOptions } from "./types";
 
 const LEADING = LEADING_FIXED_HEADERS;
 const WIKI_NAME_HEADERS = new Set(WIKI_TRIPLET_RULES.map(([name]) => name));
+
+const FULL_EDIT_DISPLAY_BOUNDS: [number, number] = [
+  columnIndexFromLetter(FULL_EDIT_DISPLAY_RANGE[0]),
+  columnIndexFromLetter(FULL_EDIT_DISPLAY_RANGE[1]),
+];
+const FULL_EDIT_BOUNDS: [number, number][] = FULL_EDIT_COLUMN_RANGES.map(
+  ([from, to]) => [columnIndexFromLetter(from), columnIndexFromLetter(to)]
+);
+
+/** 全列表示モードで表示対象とする列か（AN〜FT） */
+export function isFullDisplayColIndex(colIndex: number): boolean {
+  return (
+    colIndex >= FULL_EDIT_DISPLAY_BOUNDS[0] &&
+    colIndex <= FULL_EDIT_DISPLAY_BOUNDS[1]
+  );
+}
+
+/** 全列編集モードで自由入力編集を許可する列か（AN〜FD, FJ〜FT） */
+export function isFullEditableColIndex(colIndex: number): boolean {
+  return FULL_EDIT_BOUNDS.some(([a, b]) => colIndex >= a && colIndex <= b);
+}
 
 export function columnLetter(colIndex: number): string {
   let letter = "";
@@ -92,21 +115,34 @@ export function isLightBlueWorkColumn(rawHeader: string, colIndex: number): bool
   return LIGHT_BLUE_WORK_HEADERS.has(rawHeader);
 }
 
-export function isWritableColumn(rawHeader: string, colIndex: number): boolean {
+export function isWritableColumn(
+  rawHeader: string,
+  colIndex: number,
+  fullEditMode = false
+): boolean {
   const letter = columnLetter(colIndex);
   if (WRITE_DENYLIST_COL_LETTERS.has(letter)) return false;
   if (isWorkStatusColumn(rawHeader, colIndex)) return true;
+  if (fullEditMode && isFullEditableColIndex(colIndex)) return true;
   return LIGHT_BLUE_WORK_HEADERS.has(rawHeader) || rawHeader === COL_ASSIGNEE;
 }
 
 export function isInlineEditableColumn(
   uniqueName: string,
   rawHeader: string,
-  colIndex: number
+  colIndex: number,
+  fullEditMode = false
 ): boolean {
   if (isWorkStatusColumn(rawHeader, colIndex)) return true;
   if (isMemoWorkColumn(rawHeader) || isCorrectWikiHeader(rawHeader)) {
-    return isWritableColumn(rawHeader, colIndex);
+    return isWritableColumn(rawHeader, colIndex, fullEditMode);
+  }
+  if (
+    fullEditMode &&
+    isFullEditableColIndex(colIndex) &&
+    isWritableColumn(rawHeader, colIndex, fullEditMode)
+  ) {
+    return true;
   }
   return false;
 }
@@ -378,7 +414,7 @@ export function workDisplayColumns(
   rowByUnique: Record<string, string>,
   rawHeaders: string[],
   uniqueHeaders: string[],
-  options: Pick<WorkOptions, "showEmptyFromAc" | "lightBlueOnly">
+  options: Pick<WorkOptions, "showEmptyFromAc" | "lightBlueOnly" | "fullEditMode">
 ): string[] {
   const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
   const cols: string[] = [];
@@ -386,6 +422,16 @@ export function workDisplayColumns(
   for (const header of LEADING) {
     const uniqueName = headerMap[header];
     if (uniqueName && uniqueName in rowByUnique) cols.push(uniqueName);
+  }
+
+  if (options.fullEditMode) {
+    for (let i = 0; i < uniqueHeaders.length; i++) {
+      const uniqueName = uniqueHeaders[i];
+      if (!(uniqueName in rowByUnique) || cols.includes(uniqueName)) continue;
+      if (!isFullDisplayColIndex(i + 1)) continue;
+      cols.push(uniqueName);
+    }
+    return cols;
   }
 
   let startIndex = rawHeaders.indexOf(WORK_TABLE_START_HEADER);
@@ -472,7 +518,8 @@ export function buildColumnPayload(
   rowByUnique: Record<string, string>,
   workCols: string[],
   rawHeaders: string[],
-  uniqueHeaders: string[]
+  uniqueHeaders: string[],
+  fullEditMode = false
 ): ColumnPayload[] {
   const headerByUnique: Record<string, string> = {};
   for (let i = 0; i < uniqueHeaders.length; i++) {
@@ -484,7 +531,12 @@ export function buildColumnPayload(
     const rawHeader = headerByUnique[uniqueName] ?? uniqueName;
     const value = rowByUnique[uniqueName];
     const display = isCellEmpty(value) ? "—" : String(value).trim();
-    const inline = isInlineEditableColumn(uniqueName, rawHeader, colIndex);
+    const inline = isInlineEditableColumn(
+      uniqueName,
+      rawHeader,
+      colIndex,
+      fullEditMode
+    );
     const isStatus = isWorkStatusColumn(rawHeader, colIndex);
     let editValue = isCellEmpty(value) ? "" : String(value);
     if (isStatus) editValue = normalizeWorkStatus(value);
@@ -515,14 +567,15 @@ export function buildWritePlan(
   sheetRowNumber: number,
   rawHeaders: string[],
   uniqueHeaders: string[],
-  updates: Record<string, string>
+  updates: Record<string, string>,
+  fullEditMode = false
 ): { cell: string; value: string }[] {
   const plan: { cell: string; value: string }[] = [];
   for (const [uniqueName, value] of Object.entries(updates)) {
     const colIndex = uniqueHeaders.indexOf(uniqueName);
     if (colIndex < 0) continue;
     const rawHeader = rawHeaders[colIndex];
-    if (!isWritableColumn(rawHeader, colIndex + 1)) continue;
+    if (!isWritableColumn(rawHeader, colIndex + 1, fullEditMode)) continue;
     const letter = columnLetter(colIndex + 1);
     plan.push({ cell: `${letter}${sheetRowNumber}`, value });
   }
@@ -533,7 +586,8 @@ export function collectEditableUpdates(
   edits: Record<string, string>,
   workCols: string[],
   rawHeaders: string[],
-  uniqueHeaders: string[]
+  uniqueHeaders: string[],
+  fullEditMode = false
 ): Record<string, string> {
   const headerByUnique: Record<string, string> = {};
   for (let i = 0; i < uniqueHeaders.length; i++) {
@@ -544,7 +598,9 @@ export function collectEditableUpdates(
     if (!(uniqueName in edits)) continue;
     const colIndex = uniqueHeaders.indexOf(uniqueName) + 1;
     const rawHeader = headerByUnique[uniqueName];
-    if (!isInlineEditableColumn(uniqueName, rawHeader, colIndex)) continue;
+    if (!isInlineEditableColumn(uniqueName, rawHeader, colIndex, fullEditMode)) {
+      continue;
+    }
     updates[uniqueName] = edits[uniqueName];
   }
   return updates;
@@ -590,13 +646,22 @@ export function buildRowPayload(
   rawHeaders: string[],
   uniqueHeaders: string[],
   sheetRowNumber: number,
-  options: Pick<WorkOptions, "showEmptyFromAc" | "lightBlueOnly">
+  options: Pick<WorkOptions, "showEmptyFromAc" | "lightBlueOnly" | "fullEditMode">
 ) {
+  const fullEditMode = options.fullEditMode === true;
   let workCols = workDisplayColumns(rowByUnique, rawHeaders, uniqueHeaders, options);
-  workCols = ensureWorkDisplayCols(workCols, rawHeaders, uniqueHeaders);
+  if (!fullEditMode) {
+    workCols = ensureWorkDisplayCols(workCols, rawHeaders, uniqueHeaders);
+  }
   return {
     sheetRowNumber,
     summary: rowSummary(rowByUnique, sheetRowNumber),
-    columns: buildColumnPayload(rowByUnique, workCols, rawHeaders, uniqueHeaders),
+    columns: buildColumnPayload(
+      rowByUnique,
+      workCols,
+      rawHeaders,
+      uniqueHeaders,
+      fullEditMode
+    ),
   };
 }

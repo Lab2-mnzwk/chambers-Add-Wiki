@@ -10,6 +10,7 @@ export type WorkOptions = {
   skipDone: boolean;
   lightBlueOnly: boolean;
   showEmptyFromAc: boolean;
+  fullEditMode: boolean;
   indexRows: number;
 };
 

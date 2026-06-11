@@ -21,6 +21,7 @@ const defaultOptions: WorkOptions = {
   skipDone: true,
   lightBlueOnly: true,
   showEmptyFromAc: false,
+  fullEditMode: false,
   indexRows: 10000,
 };
 
@@ -48,7 +49,7 @@ function optionsQuery(options: WorkOptions): string {
 }
 
 function rowQuery(options: WorkOptions): string {
-  return `showEmptyFromAc=${options.showEmptyFromAc}&lightBlueOnly=${options.lightBlueOnly}`;
+  return `showEmptyFromAc=${options.showEmptyFromAc}&lightBlueOnly=${options.lightBlueOnly}&fullEditMode=${options.fullEditMode}`;
 }
 
 export function WorkApp() {
@@ -220,7 +221,7 @@ export function WorkApp() {
   };
 
   const updateDisplayOption = async (
-    key: "showEmptyFromAc" | "lightBlueOnly",
+    key: "showEmptyFromAc" | "lightBlueOnly" | "fullEditMode",
     value: boolean
   ) => {
     const next = { ...options, [key]: value };
@@ -410,6 +411,7 @@ export function WorkApp() {
               <input
                 type="checkbox"
                 checked={options.lightBlueOnly}
+                disabled={options.fullEditMode}
                 onChange={(e) =>
                   void updateDisplayOption("lightBlueOnly", e.target.checked)
                 }
@@ -420,11 +422,22 @@ export function WorkApp() {
               <input
                 type="checkbox"
                 checked={options.showEmptyFromAc}
+                disabled={options.fullEditMode}
                 onChange={(e) =>
                   void updateDisplayOption("showEmptyFromAc", e.target.checked)
                 }
               />
               空の列も表示する
+            </label>
+            <label className={styles.check}>
+              <input
+                type="checkbox"
+                checked={options.fullEditMode}
+                onChange={(e) =>
+                  void updateDisplayOption("fullEditMode", e.target.checked)
+                }
+              />
+              全列表示・編集（AN〜FT）
             </label>
           </div>
 

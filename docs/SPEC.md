@@ -28,8 +28,17 @@
 |------------|------|------|
 | Wiki確認対象行のみ | ON | AC 以降は水色ヘッダー列（Wiki確認対象列）のみ対象。OFF なら AC 以降の全列が対象 |
 | 空の列も表示する | OFF | ON のとき、対象列の**空セル**も表示（値あり列は常に表示） |
+| 全列表示・編集（AN〜FT） | OFF | ON のとき下記の全列編集モード。上 2 つは無効化 |
 
-両方 ON が通常の作業表示（Wiki確認対象列のうち値がある列だけ）。
+上 2 つが両方 ON が通常の作業表示（Wiki確認対象列のうち値がある列だけ）。
+
+### 全列表示・編集モード（`fullEditMode`）
+
+- 表示: 先頭固定列 + **AN〜FT** の全列（値・水色・Wiki ルールを無視して必ず表示）。memo フィルタ・Wiki 三つ組の追加/除外も適用しない。
+- 編集: **AN〜FD** と **FJ〜FT** を自由入力テキストで編集可（`isFullEditableColIndex`）。
+  - 間の **FE〜FI**（Status=FG・Assignee=FH を含む）は自由入力対象外。Status はドロップダウン、Assignee は読取のまま。
+  - 書込禁止列（`WRITE_DENYLIST_COL_LETTERS`、現状 AE）は範囲外につき影響なし。
+- 範囲定数: `FULL_EDIT_DISPLAY_RANGE` / `FULL_EDIT_COLUMN_RANGES`（`src/lib/config.ts`）。
 
 ### 列抽出ルール（`shouldIncludeWorkColumn`）
 

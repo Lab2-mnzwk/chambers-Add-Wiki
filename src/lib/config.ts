@@ -51,6 +51,14 @@ export const WORK_ASSIGNEE_COL_LETTER = "FH";
 export const DEFAULT_INDEX_ROWS = 10000;
 export const WRITE_DENYLIST_COL_LETTERS = new Set(["AE"]);
 
+/** 全列表示・編集モード: 表示する列の範囲（列レター, 両端含む） */
+export const FULL_EDIT_DISPLAY_RANGE: [string, string] = ["AN", "FT"];
+/** 全列表示・編集モード: 自由入力で編集可能にする列レター範囲（両端含む） */
+export const FULL_EDIT_COLUMN_RANGES: [string, string][] = [
+  ["AN", "FD"],
+  ["FJ", "FT"],
+];
+
 export const MEMO_WORK_HEADERS = [
   "Agent_memo",
   "Place_memo",

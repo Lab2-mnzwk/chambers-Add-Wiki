@@ -138,7 +138,7 @@ export async function getQueue(options: WorkOptions): Promise<number[]> {
 
 export async function getRow(
   sheetRowNumber: number,
-  options: Pick<WorkOptions, "showEmptyFromAc" | "lightBlueOnly">
+  options: Pick<WorkOptions, "showEmptyFromAc" | "lightBlueOnly" | "fullEditMode">
 ): Promise<RowPayload> {
   const structure = await ensureStructure();
   let rowValues = getRowValues(sheetRowNumber);
@@ -166,11 +166,13 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
   const rowPayload = await getRow(payload.sheetRowNumber, payload.options);
   const workColNames = rowPayload.columns.map((c) => c.uniqueName);
 
+  const fullEditMode = payload.options.fullEditMode === true;
   const updates = collectEditableUpdates(
     payload.edits,
     workColNames,
     structure.rawHeaders,
-    structure.uniqueHeaders
+    structure.uniqueHeaders,
+    fullEditMode
   );
   if (payload.worker && structure.uniqueHeaders.includes(COL_ASSIGNEE)) {
     updates[COL_ASSIGNEE] = payload.worker;
@@ -180,7 +182,8 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
     payload.sheetRowNumber,
     structure.rawHeaders,
     structure.uniqueHeaders,
-    updates
+    updates,
+    fullEditMode
   );
 
   if (!plan.length) {

@@ -16,9 +16,12 @@ export async function GET(
       request.nextUrl.searchParams.get("showEmptyFromAc") === "true";
     const lightBlueOnly =
       request.nextUrl.searchParams.get("lightBlueOnly") !== "false";
+    const fullEditMode =
+      request.nextUrl.searchParams.get("fullEditMode") === "true";
     const payload = await getRow(sheetRowNumber, {
       showEmptyFromAc,
       lightBlueOnly,
+      fullEditMode,
     });
     return NextResponse.json(payload);
   } catch (e) {
