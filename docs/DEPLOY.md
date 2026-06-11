@@ -36,7 +36,7 @@ git push origin main
 | Name | Value |
 |------|-------|
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | サービスアカウント JSON の**全文**（1行） |
-| `SPREADSHEET_ID` | `1jGba1Vnzjlvf6dNj6hqVRYoPEkcJVkeU1dND-vnThrY` |
+| `SPREADSHEET_ID` | `1Mc3pX949vlO_uxWpimn7_DsUAYr87GmroqXft6fvB4I` |
 | `ENABLE_SHEET_WRITES` | `true` |
 
 6. **Deploy**

@@ -3,7 +3,7 @@
 正本実装はリポジトリ直下の **Next.js アプリ**（`src/`）。  
 旧 Streamlit / GAS は `archive/` に退避。
 
-- スプレッドシート ID: `1jGba1Vnzjlvf6dNj6hqVRYoPEkcJVkeU1dND-vnThrY`
+- スプレッドシート ID: `1Mc3pX949vlO_uxWpimn7_DsUAYr87GmroqXft6fvB4I`
 - 作業シート: `wiki付与作業シート（第一弾）`
 - Status: FG列（`Status` / `Status.1`）
 - Assignee: FH列（`Assignee`）

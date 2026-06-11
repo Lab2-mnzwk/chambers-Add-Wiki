@@ -28,7 +28,7 @@ AUTH_URL=http://localhost:3010
 GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=xxxx
 
-SPREADSHEET_ID=1jGba1Vnzjlvf6dNj6hqVRYoPEkcJVkeU1dND-vnThrY
+SPREADSHEET_ID=1Mc3pX949vlO_uxWpimn7_DsUAYr87GmroqXft6fvB4I
 ENABLE_SHEET_WRITES=true
 ```
 
