@@ -449,7 +449,7 @@ export function WorkApp() {
                   void updateDisplayOption("fullEditMode", e.target.checked)
                 }
               />
-              全列表示・編集（AN〜FT）
+              列表示・編集（AN〜FT）
             </label>
           </div>
 
