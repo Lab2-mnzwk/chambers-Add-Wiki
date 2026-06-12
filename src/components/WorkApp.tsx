@@ -16,11 +16,13 @@ import { ASSIGN_ALL_ROWS_NAME } from "@/lib/config";
 const PREFS_KEY = "wikiWorkNext";
 
 const defaultOptions: WorkOptions = {
-  worker: "",
+  // 初回（localStorage 無し）の既定。作業者名は「全件表示」、
+  // 表示は Entity値有り ON / Wiki値 - を除く OFF。
+  worker: ASSIGN_ALL_ROWS_NAME,
   queueFilter: "自分担当",
   skipDone: true,
-  lightBlueOnly: true,
-  showNamedTriplets: false,
+  lightBlueOnly: false,
+  showNamedTriplets: true,
   fullEditMode: false,
   indexRows: 10000,
 };
