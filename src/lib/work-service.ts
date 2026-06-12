@@ -1,6 +1,7 @@
 import {
   DEFAULT_INDEX_ROWS,
   ENABLE_SHEET_WRITES,
+  IDLE_CACHE_CLEAR_MS,
   SHEET_NAME,
   SPREADSHEET_DISPLAY_TITLE,
   WORK_STATUS_OPTIONS,
@@ -25,6 +26,7 @@ import {
 import {
   cacheStats,
   clearCache,
+  getLastAccessAt,
   getRowValues,
   getStructure,
   getWikiHistory,
@@ -37,6 +39,7 @@ import {
   saveRowValues,
   saveWikiHistory,
   setStructure,
+  touchLastAccessAt,
 } from "./store";
 import type {
   BootstrapPayload,
@@ -55,6 +58,19 @@ import {
 } from "./wiki-history";
 
 export { clearCache, cacheStats };
+
+/**
+ * アクセスが IDLE_CACHE_CLEAR_MS 以上空いていたら全キャッシュをクリアする。
+ * 直後の ensureStructure / getQueue / getRow / ensureWikiHistory が
+ * シートから作り直すため、アイドル明けの初回アクセスで最新化される。
+ * 連続利用中（閾値未満の間隔）は何もしないのでキャッシュ効果は維持される。
+ */
+function clearCacheIfIdle(now: number = Date.now()): void {
+  const lastAccessAt = getLastAccessAt();
+  if (lastAccessAt !== null && now - lastAccessAt >= IDLE_CACHE_CLEAR_MS) {
+    clearCache();
+  }
+}
 
 async function ensureStructure(): Promise<SheetStructure> {
   let structure = getStructure();
@@ -105,8 +121,13 @@ export async function getBootstrap(): Promise<BootstrapPayload> {
     };
   }
 
+  // アイドル明け（最終アクセスから閾値以上経過）なら全キャッシュをクリアし、
+  // 続く ensureStructure / queue / row / 補完候補をシートから作り直す。
+  clearCacheIfIdle();
   await ensureStructure();
   const discordNames = await loadAssignDiscordNames();
+  // 今回のアクセス時刻を記録（次回のアイドル判定の基準）。
+  touchLastAccessAt();
   return {
     authMode: oauth ? "oauth" : "service_account",
     authRequired: false,
@@ -125,6 +146,7 @@ export async function getQueue(
   options: WorkOptions,
   forceRefresh = false
 ): Promise<number[]> {
+  touchLastAccessAt();
   const structure = await ensureStructure();
   let records =
     !forceRefresh && hasQueueIndex(options.indexRows) ? loadQueueIndex() : null;
@@ -142,6 +164,7 @@ export async function getRow(
   sheetRowNumber: number,
   options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode" | "showNamedTriplets">
 ): Promise<RowPayload> {
+  touchLastAccessAt();
   const structure = await ensureStructure();
   let rowValues = getRowValues(sheetRowNumber);
   if (!rowValues) {

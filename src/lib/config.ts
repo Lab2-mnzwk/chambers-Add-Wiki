@@ -34,6 +34,18 @@ export const COL_ASSIGNEE = "Assignee";
 
 export const ENABLE_SHEET_WRITES = process.env.ENABLE_SHEET_WRITES !== "false";
 
+/**
+ * アクセスが空いた（アイドル）と判定する閾値（ミリ秒）。
+ * 最終アクセスからこの時間以上経過した状態で次のアクセスがあると、
+ * 起動時に全キャッシュをクリアしてシートから作り直す。
+ * 既定 30 分。環境変数 IDLE_CACHE_CLEAR_MINUTES で分単位に上書き可。
+ */
+export const IDLE_CACHE_CLEAR_MS = (() => {
+  const raw = Number(process.env.IDLE_CACHE_CLEAR_MINUTES);
+  const minutes = Number.isFinite(raw) && raw > 0 ? raw : 30;
+  return minutes * 60 * 1000;
+})();
+
 export const STATUS_NOT_STARTED = "未着手";
 export const STATUS_DONE = "完了";
 export const STATUS_NEEDS_REVIEW = "要確認";

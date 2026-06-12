@@ -17,6 +17,8 @@ type CacheBundle = {
   queueIndex: QueueRecord[];
   rows: Record<string, string[]>;
   wikiHistory: WikiHistoryIndex | null;
+  /** 最終アクセス時刻（epoch ms）。アイドル判定に使用。未設定の旧キャッシュは null。 */
+  lastAccessAt: number | null;
 };
 
 function cacheDir(): string {
@@ -41,9 +43,24 @@ function cacheFile(): string {
 function readBundle(): CacheBundle {
   const file = cacheFile();
   if (!fs.existsSync(file)) {
-    return { structure: null, indexRows: 0, queueIndex: [], rows: {}, wikiHistory: null };
+    return {
+      structure: null,
+      indexRows: 0,
+      queueIndex: [],
+      rows: {},
+      wikiHistory: null,
+      lastAccessAt: null,
+    };
   }
-  return JSON.parse(fs.readFileSync(file, "utf8")) as CacheBundle;
+  const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<CacheBundle>;
+  return {
+    structure: parsed.structure ?? null,
+    indexRows: parsed.indexRows ?? 0,
+    queueIndex: parsed.queueIndex ?? [],
+    rows: parsed.rows ?? {},
+    wikiHistory: parsed.wikiHistory ?? null,
+    lastAccessAt: parsed.lastAccessAt ?? null,
+  };
 }
 
 function writeBundle(bundle: CacheBundle): void {
@@ -53,6 +70,20 @@ function writeBundle(bundle: CacheBundle): void {
 export function clearCache(): void {
   const file = cacheFile();
   if (fs.existsSync(file)) fs.unlinkSync(file);
+}
+
+/** 最終アクセス時刻（epoch ms）。キャッシュが無い・未設定なら null。 */
+export function getLastAccessAt(): number | null {
+  const file = cacheFile();
+  if (!fs.existsSync(file)) return null;
+  return readBundle().lastAccessAt;
+}
+
+/** 最終アクセス時刻を現在時刻で更新する（キャッシュが無ければ生成）。 */
+export function touchLastAccessAt(now: number = Date.now()): void {
+  const bundle = readBundle();
+  bundle.lastAccessAt = now;
+  writeBundle(bundle);
 }
 
 export function cacheStats(): {
