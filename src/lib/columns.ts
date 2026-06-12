@@ -427,6 +427,17 @@ function expandWikiTripletColumns(
   return [...leading, ...rest];
 }
 
+/** 全列表示モード（Entity値有り OFF・全列編集 OFF・水色フィルタ OFF） */
+export function isAllColsMode(
+  options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode" | "showNamedTriplets">
+): boolean {
+  return (
+    options.fullEditMode !== true &&
+    options.showNamedTriplets !== true &&
+    options.lightBlueOnly === false
+  );
+}
+
 export function workDisplayColumns(
   rowByUnique: Record<string, string>,
   rawHeaders: string[],
@@ -453,6 +464,16 @@ export function workDisplayColumns(
 
   let startIndex = rawHeaders.indexOf(WORK_TABLE_START_HEADER);
   if (startIndex < 0) startIndex = rawHeaders.length;
+
+  // 全列表示（Entity値有り OFF）: AC 以降の全列をフィルタなしで表示（空列・三つ組も全部）。
+  if (isAllColsMode(options)) {
+    for (let i = startIndex; i < uniqueHeaders.length; i++) {
+      const uniqueName = uniqueHeaders[i];
+      if (!(uniqueName in rowByUnique) || cols.includes(uniqueName)) continue;
+      cols.push(uniqueName);
+    }
+    return cols;
+  }
 
   for (let i = startIndex; i < uniqueHeaders.length; i++) {
     const uniqueName = uniqueHeaders[i];
@@ -673,7 +694,8 @@ export function buildRowPayload(
 ) {
   const fullEditMode = options.fullEditMode === true;
   let workCols = workDisplayColumns(rowByUnique, rawHeaders, uniqueHeaders, options);
-  if (!fullEditMode) {
+  // 全列表示は memo フィルタ・status 補完を行わず、範囲内の全列をそのまま表示。
+  if (!fullEditMode && !isAllColsMode(options)) {
     workCols = ensureWorkDisplayCols(workCols, rawHeaders, uniqueHeaders);
   }
   const assigneeUnique = resolveWorkAssigneeUnique(rawHeaders, uniqueHeaders);

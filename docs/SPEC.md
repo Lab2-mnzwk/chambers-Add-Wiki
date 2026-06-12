@@ -54,7 +54,7 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 
 | Entity値有り | Wiki値 - を除く | `showNamedTriplets` | `lightBlueOnly` | 表示 |
 |---|---|---|---|---|
-| OFF | （無効） | false | false | 全列表示（AC 以降、データのある列＋active 三つ組セット） |
+| OFF | （無効） | false | false | 全列表示（AC 以降の全列をフィルタなしで表示。空列・三つ組も全部、memo/status 補完なし） |
 | ON | OFF | true | false | 名称有の三つ組セット（wiki_dash 含む） |
 | ON | ON（既定） | false | true | 名称有・Wiki≠`-`（active）の三つ組セットのみ |
 
