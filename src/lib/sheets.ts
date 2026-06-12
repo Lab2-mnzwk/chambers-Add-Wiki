@@ -35,13 +35,6 @@ function getServiceAccountCredentials(): Record<string, unknown> {
     process.env.GOOGLE_APPLICATION_CREDENTIALS,
     path.join(process.cwd(), "service_account.json"),
     path.join(process.cwd(), "credentials", "service_account.json"),
-    path.join(
-      process.cwd(),
-      "archive",
-      "streamlit",
-      ".streamlit",
-      "service_account.json"
-    ),
   ].filter(Boolean) as string[];
 
   for (const file of candidates) {
@@ -60,13 +53,6 @@ export function hasServiceAccountCredentials(): boolean {
     process.env.GOOGLE_APPLICATION_CREDENTIALS,
     path.join(process.cwd(), "service_account.json"),
     path.join(process.cwd(), "credentials", "service_account.json"),
-    path.join(
-      process.cwd(),
-      "archive",
-      "streamlit",
-      ".streamlit",
-      "service_account.json"
-    ),
   ].filter(Boolean) as string[];
 
   return candidates.some((file) => fs.existsSync(file));

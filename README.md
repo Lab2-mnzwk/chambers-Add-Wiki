@@ -44,7 +44,6 @@ npm run dev
 pj140/
 ├── src/              # Next.js アプリ（本番）
 ├── docs/             # 仕様・デプロイ手順
-├── archive/          # 旧 Streamlit / GAS（退避）
 ├── package.json
 └── .env.example
 ```

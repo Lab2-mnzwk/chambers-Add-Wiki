@@ -16,11 +16,11 @@ credentials/
 node_modules/
 .next/
 .cache/
+*.tsbuildinfo
+
+# Streamlit シークレット（退避フォルダ削除後の保険）
+**/.streamlit/secrets.toml
 
 # ローカル・IDE
 .cursor/
 assets/
-
-# 退避フォルダ内のシークレット
-archive/streamlit/.streamlit/secrets.toml
-archive/streamlit/.streamlit/service_account.json

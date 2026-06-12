@@ -1,7 +1,6 @@
 # Wiki付与 行作業 UI — 設計仕様
 
-正本実装はリポジトリ直下の **Next.js アプリ**（`src/`）。  
-旧 Streamlit / GAS は `archive/` に退避。
+正本実装はリポジトリ直下の **Next.js アプリ**（`src/`）。
 
 - スプレッドシート ID: `1Mc3pX949vlO_uxWpimn7_DsUAYr87GmroqXft6fvB4I`
 - 作業シート: `wiki付与作業シート（第一弾）`
@@ -163,5 +162,3 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 | Sheets API | `src/lib/sheets.ts`, `src/lib/work-service.ts` |
 | 認証・トークン更新 | `src/auth.ts`, `src/lib/google-session.ts`, `src/lib/api-error.ts` |
 | UI | `src/components/WorkApp.tsx`, `WorkRowTable.tsx` |
-| 旧 Streamlit | `archive/streamlit/app.py` |
-| 旧 GAS | `archive/gas/` |
