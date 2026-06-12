@@ -98,8 +98,8 @@ function renderColumn(
 ) {
   const classes = [styles.col];
   if (col.isLeading) classes.push(stacked ? styles.leadingStacked : styles.leading);
-  if (col.isWiki && !col.inline) classes.push(styles.wiki);
-  if (col.inline) classes.push(styles.edit);
+  // 3列セット（名称/Wiki/正しいwiki）と memo は実シート同様の水色系。編集欄の有無で可否は分かる。
+  if (col.isWiki || col.isMemo) classes.push(styles.wiki);
 
   return (
     <div key={col.uniqueName} className={classes.join(" ")}>

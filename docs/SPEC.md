@@ -65,7 +65,7 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
   - 通常モードと違い、**Wiki が「-」(`wiki_dash`) の三つ組も非表示にしない**（`expandWikiTripletColumns` の削除処理をスキップ）。
   - **空セルの三つ組列も表示**する（`shouldIncludeWorkColumn` は名称が空でない＝`state !== "empty_name"` を満たす三つ組メンバーを表示）。
 - 名称が空の三つ組は従来どおり非表示。memo は通常モード同様、表示中セクションに応じて追加。
-- 編集可否は通常モードと同じ（正しいwiki は黄枠で編集可、名称・Wiki は読取）。
+- 編集可否は通常モードと同じ（正しいwiki は編集可、名称・Wiki は読取）。
 
 ### 列表示・編集モード（`fullEditMode`）
 
@@ -104,12 +104,17 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 
 ## 編集・保存
 
-- 編集: Status / memo / 正しいwiki のみ（黄枠）。`fullEditMode` ON 時は上記「列表示・編集モード」参照
+- 編集: Status / memo / 正しいwiki のみ。`fullEditMode` ON 時は上記「列表示・編集モード」参照
 - 保存: 「次へ（保存）」のみ。入力中は再読込しない
+
+#### 欄色
+
+- 3列セット（名称 / Wiki / 正しいwiki）と memo は、実シートに合わせ **水色系**（`--work-col-wiki-bg`）で表示（読取・編集問わず）。Light/Dark とも視認しやすい配色。
+- 旧・編集列の黄色強調は撤去（編集可否は入力欄の有無で判別）。入力欄の枠も水色系に統一。
 
 ## 正しいWiki 補完機能（`WikiCorrectInput` + `/api/wiki-history`）
 
-正しいwiki セル（黄枠）の入力時に、過去の確定値を候補表示する補完機能。
+正しいwiki セルの入力時に、過去の確定値を候補表示する補完機能。
 
 - **候補の生成元**: 作業シートを走査し、`名称 + Wiki + 正しいwiki` がすべて揃い、正しいwiki が URL の三つ組を集計（`aggregateWikiHistory`）。同一 `名称/Wiki/正しいwiki` は件数を加算。インデックス行数は `indexRows`。
 - **候補の絞り込み**（`suggestWikiHistory`）: 編集中セルの行の `名称`（必要に応じ `Wiki`）をキーに照合。
