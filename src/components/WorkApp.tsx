@@ -419,7 +419,27 @@ export function WorkApp() {
                 </option>
               ))}
             </select>
+          </div>
 
+          <button
+            type="button"
+            className={styles.settingsMoreToggle}
+            aria-expanded={moreSettingsOpen}
+            onClick={() => setMoreSettingsOpen((open) => !open)}
+          >
+            表示設定等
+            <span className={styles.settingsMoreIcon} aria-hidden>
+              {moreSettingsOpen ? "▲" : "▼"}
+            </span>
+          </button>
+
+          <div
+            className={
+              moreSettingsOpen
+                ? `${styles.settingsMore} ${styles.settingsMoreOpen}`
+                : styles.settingsMore
+            }
+          >
             <label className={styles.check}>
               <input
                 type="checkbox"
@@ -448,7 +468,7 @@ export function WorkApp() {
                   void updateDisplayOption("showNamedTriplets", e.target.checked)
                 }
               />
-              作業対象列＋名称に値有
+              Entity値有り
             </label>
             <label className={styles.check}>
               <input
@@ -460,27 +480,7 @@ export function WorkApp() {
               />
               列表示・編集（AN〜FT）
             </label>
-          </div>
 
-          <button
-            type="button"
-            className={styles.settingsMoreToggle}
-            aria-expanded={moreSettingsOpen}
-            onClick={() => setMoreSettingsOpen((open) => !open)}
-          >
-            その他の設定
-            <span className={styles.settingsMoreIcon} aria-hidden>
-              {moreSettingsOpen ? "▲" : "▼"}
-            </span>
-          </button>
-
-          <div
-            className={
-              moreSettingsOpen
-                ? `${styles.settingsMore} ${styles.settingsMoreOpen}`
-                : styles.settingsMore
-            }
-          >
             <label className={styles.label}>表示テーマ</label>
             <select
               value={themeMode}

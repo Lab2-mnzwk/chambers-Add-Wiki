@@ -168,7 +168,7 @@
 }
 
 .settingsMoreToggle {
-  display: block;
+  display: none;
   width: 100%;
   margin-top: 10px;
   padding: 8px 10px;
@@ -187,8 +187,9 @@
   opacity: 0.7;
 }
 
+/* PC: 作業者名以外の表示設定も常時展開（トグルは非表示） */
 .settingsMore {
-  display: none;
+  display: block;
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--border-panel);
@@ -196,6 +197,21 @@
 
 .settingsMoreOpen {
   display: block;
+}
+
+/* スマホ: 作業者名以外は「表示設定等」で折り畳み */
+@media (max-width: 900px) {
+  .settingsMoreToggle {
+    display: block;
+  }
+
+  .settingsMore {
+    display: none;
+  }
+
+  .settingsMore.settingsMoreOpen {
+    display: block;
+  }
 }
 
 .label {
