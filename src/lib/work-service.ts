@@ -121,13 +121,16 @@ export async function getBootstrap(): Promise<BootstrapPayload> {
   };
 }
 
-export async function getQueue(options: WorkOptions): Promise<number[]> {
+export async function getQueue(
+  options: WorkOptions,
+  forceRefresh = false
+): Promise<number[]> {
   const structure = await ensureStructure();
-  let records = hasQueueIndex(options.indexRows)
-    ? loadQueueIndex()
-    : null;
+  let records =
+    !forceRefresh && hasQueueIndex(options.indexRows) ? loadQueueIndex() : null;
 
   if (!records) {
+    // forceRefresh 時はシートから status/assignee を取り直す（index 列のみの 1 回の batchGet）。
     records = await fetchQueueIndex(structure, options.indexRows);
     saveQueueIndex(records, options.indexRows);
   }
@@ -147,13 +150,22 @@ export async function getRow(
   }
 
   const rowByUnique = rowByUniqueFromValues(structure.uniqueHeaders, rowValues);
-  return buildRowPayload(
+  const payload = buildRowPayload(
     rowByUnique,
     structure.rawHeaders,
     structure.uniqueHeaders,
     sheetRowNumber,
     options
   );
+
+  // 自己修復: 開いた行のライブ status をキュー index キャッシュへ反映する。
+  // アプリ外でシートを直接編集して完了にした行も、開けば以降の判定・保存再計算で除外される。
+  const statusValue = payload.columns.find((c) => c.isStatus)?.value;
+  if (statusValue) {
+    patchQueueIndex(sheetRowNumber, statusValue, "");
+  }
+
+  return payload;
 }
 
 export async function saveRow(payload: SavePayload): Promise<SaveResult> {

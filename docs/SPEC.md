@@ -25,11 +25,16 @@
 
 #### キューキャッシュと完了スキップ（次/前の統一）
 
-- キュー index は `.cache/<spreadsheetId>.json` の `queueIndex`（行ごとの status/assignee）に保持。`/api/queue` はこのキャッシュから `filterQueueRows` で対象行を算出（シート I/O なし）。
+- キュー index は `.cache/<spreadsheetId>.json` の `queueIndex`（行ごとの status/assignee）に保持。`/api/queue` はこのキャッシュから `filterQueueRows` で対象行を算出（シート I/O なし）。`skipDone` は **キャッシュの status** を見て完了行を除外する。
 - 保存で Status が変わると `patchQueueIndex` がキャッシュの status を更新する。
 - 保存（`saveRow`）は **patch 反映後のキャッシュから最新キューを再計算**して返す（`SaveResult.queueSheetRows`、行番号昇順）。「次の行」は現在行より後ろの最初の行（`r > current`）＝最新の未完了行。
 - クライアントは保存応答の `queueSheetRows` で `queueRows` を更新し、**「前の行」もこの最新リストを参照**（`skipDone` 時、リストに無い＝完了/対象外の行は戻り時もスキップ）。
-- これにより取り込み後の status 変更が反映され、進む/戻るで完了行を踏まない判定を **スプレッドシート追加アクセスなし** で実現。外部での直接編集など、保存を伴わない変更は「キュー再読込」で取り込む。
+
+##### キャッシュ鮮度（外部編集への追従）
+
+- **行を開くたびに自己修復**: `getRow` は読み込んだ行のライブ status を `patchQueueIndex` でキャッシュへ反映する。アプリ外でシートを直接「完了」にした行も、一度開けば以降の判定・保存再計算・再読込で除外される。
+- **「キュー再読込」は強制リフレッシュ**: ボタン押下時は `/api/queue?...&refresh=true` で `getQueue(options, true)` を呼び、キャッシュを無視して **シートから index（連番/status/assignee）を 1 回の batchGet で取り直す**。これでアプリ外の完了も含めて即座に反映される（行データ・構造・Wiki 履歴は保持＝軽量）。
+- 通常の読込（作業者切替・`skipDone`/`indexRows` 変更など）はキャッシュ利用（`refresh` なし）でシート I/O を抑える。`skipDone` が「効かない」場合は、外部編集でキャッシュが古い可能性があるため「キュー再読込」を実行する。
 
 ### 表示オプション（チェックボックス）
 

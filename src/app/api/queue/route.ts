@@ -18,7 +18,8 @@ function parseOptions(searchParams: URLSearchParams): WorkOptions {
 export async function GET(request: NextRequest) {
   try {
     const options = parseOptions(request.nextUrl.searchParams);
-    const sheetRows = await getQueue(options);
+    const forceRefresh = request.nextUrl.searchParams.get("refresh") === "true";
+    const sheetRows = await getQueue(options, forceRefresh);
     return NextResponse.json({ sheetRows });
   } catch (e) {
     return apiErrorResponse(e);

@@ -117,9 +117,10 @@ export function WorkApp() {
   );
 
   const loadQueue = useCallback(
-    async (opts: WorkOptions, keepPosition: boolean) => {
+    async (opts: WorkOptions, keepPosition: boolean, forceRefresh = false) => {
       setMessage("キューを読み込み中…");
-      const res = await fetch(`/api/queue?${optionsQuery(opts)}`);
+      const qs = optionsQuery(opts) + (forceRefresh ? "&refresh=true" : "");
+      const res = await fetch(`/api/queue?${qs}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "キューの読み込みに失敗");
       const rows = (data.sheetRows ?? []) as number[];
@@ -492,7 +493,7 @@ export function WorkApp() {
                 type="button"
                 className={styles.secondary}
                 onClick={() =>
-                  loadQueue(options, true).catch((e) =>
+                  loadQueue(options, true, true).catch((e) =>
                     setMessage(String(e), "error")
                   )
                 }
