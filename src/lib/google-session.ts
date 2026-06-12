@@ -1,6 +1,6 @@
 import { decode } from "@auth/core/jwt";
 import { cookies } from "next/headers";
-import { auth, isOAuthConfigured } from "@/auth";
+import { auth, fetchRefreshedGoogleAccessToken, isOAuthConfigured } from "@/auth";
 
 function sessionCookieName(): string {
   return process.env.NODE_ENV === "production"
@@ -22,8 +22,27 @@ export async function getGoogleAccessToken(): Promise<string | null> {
     salt: sessionCookieName(),
   });
 
-  if (!token?.accessToken || token.error) return null;
-  return token.accessToken as string;
+  if (!token) return null;
+
+  const accessToken = token.accessToken as string | undefined;
+  const refreshToken = token.refreshToken as string | undefined;
+  const expiresAt = token.expiresAt as number | undefined;
+
+  // クッキー内のトークンが有効期限内（60秒の余裕）ならそのまま使う。
+  const stillValid =
+    accessToken && expiresAt && Date.now() / 1000 < expiresAt - 60;
+  if (stillValid) return accessToken;
+
+  // 期限切れ・期限間近のときはここで refresh する。
+  // jwt コールバックでの refresh はルートハンドラだとクッキーへ書き戻らず、
+  // 古い access token のまま Sheets API に渡って "Invalid Credentials" になるため、
+  // トークン取得経路でも確実に最新化する（セーフティネット）。
+  const refreshed = await fetchRefreshedGoogleAccessToken(refreshToken);
+  if (refreshed) return refreshed.accessToken;
+
+  // refresh 不可（refresh token 無し等）。期限内トークンが無ければ再ログインが必要。
+  if (accessToken && !token.error) return accessToken;
+  return null;
 }
 
 export async function requireGoogleAccessToken(): Promise<string> {

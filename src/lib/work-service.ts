@@ -8,6 +8,7 @@ import {
   workSheetEditUrl,
 } from "./config";
 import { auth, isOAuthConfigured } from "@/auth";
+import { isCredentialError } from "./api-error";
 import {
   buildRowPayload,
   buildWritePlan,
@@ -106,40 +107,51 @@ export async function getBootstrap(): Promise<BootstrapPayload> {
   const oauth = isOAuthConfigured();
   const session = oauth ? await auth() : null;
 
-  if (oauth && !session?.user) {
+  const authRequiredPayload = (): BootstrapPayload => ({
+    authMode: "oauth",
+    authRequired: true,
+    userEmail: null,
+    spreadsheetTitle: SPREADSHEET_DISPLAY_TITLE,
+    sheetName: SHEET_NAME,
+    sheetUrl: workSheetEditUrl(),
+    discordNames: [],
+    statusOptions: [...WORK_STATUS_OPTIONS],
+    defaultIndexRows: DEFAULT_INDEX_ROWS,
+    enableWrites: ENABLE_SHEET_WRITES,
+  });
+
+  if (oauth && (!session?.user || session.error)) {
+    return authRequiredPayload();
+  }
+
+  try {
+    // アイドル明け（最終アクセスから閾値以上経過）なら全キャッシュをクリアし、
+    // 続く ensureStructure / queue / row / 補完候補をシートから作り直す。
+    clearCacheIfIdle();
+    await ensureStructure();
+    const discordNames = await loadAssignDiscordNames();
+    // 今回のアクセス時刻を記録（次回のアイドル判定の基準）。
+    touchLastAccessAt();
     return {
-      authMode: "oauth",
-      authRequired: true,
-      userEmail: null,
+      authMode: oauth ? "oauth" : "service_account",
+      authRequired: false,
+      userEmail: session?.user?.email ?? null,
       spreadsheetTitle: SPREADSHEET_DISPLAY_TITLE,
       sheetName: SHEET_NAME,
       sheetUrl: workSheetEditUrl(),
-      discordNames: [],
+      discordNames,
       statusOptions: [...WORK_STATUS_OPTIONS],
       defaultIndexRows: DEFAULT_INDEX_ROWS,
       enableWrites: ENABLE_SHEET_WRITES,
     };
+  } catch (e) {
+    // OAuth で資格情報が無効（期限切れ・refresh 失敗）なら、行き止まりのエラーではなく
+    // ログイン画面を出す（LoginPanel）。それ以外のエラーは従来どおり投げる。
+    if (oauth && isCredentialError(e)) {
+      return authRequiredPayload();
+    }
+    throw e;
   }
-
-  // アイドル明け（最終アクセスから閾値以上経過）なら全キャッシュをクリアし、
-  // 続く ensureStructure / queue / row / 補完候補をシートから作り直す。
-  clearCacheIfIdle();
-  await ensureStructure();
-  const discordNames = await loadAssignDiscordNames();
-  // 今回のアクセス時刻を記録（次回のアイドル判定の基準）。
-  touchLastAccessAt();
-  return {
-    authMode: oauth ? "oauth" : "service_account",
-    authRequired: false,
-    userEmail: session?.user?.email ?? null,
-    spreadsheetTitle: SPREADSHEET_DISPLAY_TITLE,
-    sheetName: SHEET_NAME,
-    sheetUrl: workSheetEditUrl(),
-    discordNames,
-    statusOptions: [...WORK_STATUS_OPTIONS],
-    defaultIndexRows: DEFAULT_INDEX_ROWS,
-    enableWrites: ENABLE_SHEET_WRITES,
-  };
 }
 
 export async function getQueue(

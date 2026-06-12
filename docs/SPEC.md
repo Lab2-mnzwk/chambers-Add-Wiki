@@ -137,12 +137,24 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 - 作業者名の選択は **キューの担当フィルタ**であり、通常は選択値と Assignee が一致する行のみが対象。
 - 特別値 **「全件表示」**（`ASSIGN_ALL_ROWS_NAME`。シート上のラベル「全体」=`ASSIGN_ALL_ROWS_SHEET_LABEL` を変換）を選ぶと **Assignee で絞らず全行**をキューにする（`skipDone` は引き続き適用）。この場合、行指定で開く際の担当ガードも無効。
 
+## 認証とトークン更新（OAuth モード）
+
+`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `AUTH_SECRET` が揃うと OAuth モード（`isOAuthConfigured`）。Google ログインユーザーのアクセストークンで Sheets API を呼ぶ。サービスアカウント JSON のみの場合はサービスアカウント認証。
+
+- **トークンの保持**: NextAuth（JWT セッション）。`accessToken` / `refreshToken` / `expiresAt` をセッション Cookie 内に保持。
+- **更新（refresh）**: Google のアクセストークンは約1時間で失効。`auth.ts` の `jwt` コールバックが期限切れ（`expiresAt - 60秒`）で `fetchRefreshedGoogleAccessToken` により再取得。
+- **サーバー側のトークン取得**: `getGoogleAccessToken`（`src/lib/google-session.ts`）は Cookie をデコードして使用。**期限切れ・期限間近のときはこの場で refresh** してから返す。
+  - 理由: ルートハンドラ内の `auth()` による refresh はトークンを Cookie へ書き戻さないことがあり、古いトークンのまま Sheets API に渡ると `Invalid Credentials` になる。取得経路でも再取得することで確実に最新化する（セーフティネット）。
+- **資格情報エラー時の扱い**: `Invalid Credentials` / `invalid_grant` 等は `isCredentialError`（`src/lib/api-error.ts`）で検出し、`401` + 「再ログインしてください」に変換。`getBootstrap` は資格情報エラー（および `session.error`）時に **行き止まりのエラーではなくログイン画面（`LoginPanel`）** を表示する。
+- **再ログインが必要なケース**: refresh トークンが無い/失効した場合（古い認可・連携解除など）。一度ログアウト→ログインすると、`access_type=offline` + `prompt=consent` により refresh トークンが再保存され、以降は自動更新される。
+
 ## 実装参照
 
 | 内容 | パス |
 |------|------|
 | 列ルール | `src/lib/columns.ts` |
 | Sheets API | `src/lib/sheets.ts`, `src/lib/work-service.ts` |
+| 認証・トークン更新 | `src/auth.ts`, `src/lib/google-session.ts`, `src/lib/api-error.ts` |
 | UI | `src/components/WorkApp.tsx`, `WorkRowTable.tsx` |
 | 旧 Streamlit | `archive/streamlit/app.py` |
 | 旧 GAS | `archive/gas/` |

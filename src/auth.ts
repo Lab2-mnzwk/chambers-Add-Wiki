@@ -12,13 +12,19 @@ export function isOAuthConfigured(): boolean {
   );
 }
 
-async function refreshGoogleAccessToken(token: JWT): Promise<JWT> {
+/**
+ * refresh token で Google access token を再取得する低レベル関数。
+ * 成功で {accessToken, expiresAt(epoch秒)}、失敗で null。
+ * jwt コールバックとサーバー側のトークン取得（google-session）の両方から使う。
+ */
+export async function fetchRefreshedGoogleAccessToken(
+  refreshToken: string | undefined
+): Promise<{ accessToken: string; expiresAt: number } | null> {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const refreshToken = token.refreshToken as string | undefined;
 
   if (!clientId || !clientSecret || !refreshToken) {
-    return { ...token, error: "RefreshTokenMissing" };
+    return null;
   }
 
   try {
@@ -40,18 +46,35 @@ async function refreshGoogleAccessToken(token: JWT): Promise<JWT> {
     };
 
     if (!response.ok || !payload.access_token) {
-      throw new Error(payload.error ?? "Token refresh failed");
+      return null;
     }
 
     return {
-      ...token,
       accessToken: payload.access_token,
       expiresAt: Math.floor(Date.now() / 1000) + (payload.expires_in ?? 3600),
-      error: undefined,
     };
   } catch {
+    return null;
+  }
+}
+
+async function refreshGoogleAccessToken(token: JWT): Promise<JWT> {
+  const refreshToken = token.refreshToken as string | undefined;
+  if (!refreshToken) {
+    return { ...token, error: "RefreshTokenMissing" };
+  }
+
+  const refreshed = await fetchRefreshedGoogleAccessToken(refreshToken);
+  if (!refreshed) {
     return { ...token, error: "RefreshAccessTokenError" };
   }
+
+  return {
+    ...token,
+    accessToken: refreshed.accessToken,
+    expiresAt: refreshed.expiresAt,
+    error: undefined,
+  };
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
