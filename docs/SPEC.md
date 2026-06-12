@@ -110,7 +110,8 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 #### 欄色
 
 - 3列セット（名称 / Wiki / 正しいwiki）と memo は、実シートに合わせ **水色系**（`--work-col-wiki-bg`）で表示（読取・編集問わず）。Light/Dark とも視認しやすい配色。
-- 旧・編集列の黄色強調は撤去（編集可否は入力欄の有無で判別）。入力欄の枠も水色系に統一。
+- **Status（FG）/ Assignee（FH）** は実シートに合わせ **黄色系**（`--work-col-key-bg`、`.keyCol`）。
+- 旧・編集列の黄色強調（全編集列を黄色）は撤去（編集可否は入力欄の有無で判別）。入力欄の枠は水色系に統一。
 
 ## 正しいWiki 補完機能（`WikiCorrectInput` + `/api/wiki-history`）
 

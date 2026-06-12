@@ -2,7 +2,7 @@
 
 import styles from "./WorkRowTable.module.css";
 import type { ColumnPayload } from "@/lib/types";
-import { LEADING_COLUMN_PAIRS, WORK_STATUS_OPTIONS } from "@/lib/config";
+import { COL_ASSIGNEE, LEADING_COLUMN_PAIRS, WORK_STATUS_OPTIONS } from "@/lib/config";
 import { isHttpUrl } from "@/lib/columns";
 import { googleSearchUrl } from "@/lib/search-links";
 import { LinkWithPreview } from "./LinkWithPreview";
@@ -100,6 +100,8 @@ function renderColumn(
   if (col.isLeading) classes.push(stacked ? styles.leadingStacked : styles.leading);
   // 3列セット（名称/Wiki/正しいwiki）と memo は実シート同様の水色系。編集欄の有無で可否は分かる。
   if (col.isWiki || col.isMemo) classes.push(styles.wiki);
+  // Status / Assignee は実シート同様の黄色系。
+  if (col.isStatus || col.rawHeader === COL_ASSIGNEE) classes.push(styles.keyCol);
 
   return (
     <div key={col.uniqueName} className={classes.join(" ")}>

@@ -72,6 +72,11 @@
   border-color: var(--work-col-wiki-border);
 }
 
+.keyCol {
+  background: var(--work-col-key-bg);
+  border-color: var(--work-col-key-border);
+}
+
 .wiki .readonly {
   flex: 1 1 auto;
   min-height: 72px;
