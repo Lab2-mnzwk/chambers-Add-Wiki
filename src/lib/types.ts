@@ -9,6 +9,8 @@ export type WorkOptions = {
   queueFilter: QueueFilter;
   skipDone: boolean;
   lightBlueOnly: boolean;
+  /** 作業対象列＋名称に値がある三つ組を丸ごと表示する排他モード */
+  showNamedTriplets: boolean;
   fullEditMode: boolean;
   indexRows: number;
 };

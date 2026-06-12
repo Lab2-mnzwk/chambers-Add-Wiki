@@ -20,6 +20,7 @@ const defaultOptions: WorkOptions = {
   queueFilter: "自分担当",
   skipDone: true,
   lightBlueOnly: true,
+  showNamedTriplets: false,
   fullEditMode: false,
   indexRows: 10000,
 };
@@ -47,7 +48,7 @@ function optionsQuery(options: WorkOptions): string {
 }
 
 function rowQuery(options: WorkOptions): string {
-  return `lightBlueOnly=${options.lightBlueOnly}&fullEditMode=${options.fullEditMode}`;
+  return `lightBlueOnly=${options.lightBlueOnly}&fullEditMode=${options.fullEditMode}&showNamedTriplets=${options.showNamedTriplets}`;
 }
 
 export function WorkApp() {
@@ -220,10 +221,13 @@ export function WorkApp() {
   };
 
   const updateDisplayOption = async (
-    key: "lightBlueOnly" | "fullEditMode",
+    key: "lightBlueOnly" | "fullEditMode" | "showNamedTriplets",
     value: boolean
   ) => {
     const next = { ...options, [key]: value };
+    // fullEditMode と showNamedTriplets は排他。
+    if (value && key === "fullEditMode") next.showNamedTriplets = false;
+    if (value && key === "showNamedTriplets") next.fullEditMode = false;
     setOptions(next);
     savePrefs(next);
     if (!currentRow) return;
@@ -428,12 +432,23 @@ export function WorkApp() {
               <input
                 type="checkbox"
                 checked={options.lightBlueOnly}
-                disabled={options.fullEditMode}
+                disabled={options.fullEditMode || options.showNamedTriplets}
                 onChange={(e) =>
                   void updateDisplayOption("lightBlueOnly", e.target.checked)
                 }
               />
               Wiki確認対象列のみ
+            </label>
+            <label className={styles.check}>
+              <input
+                type="checkbox"
+                checked={options.showNamedTriplets}
+                disabled={options.fullEditMode}
+                onChange={(e) =>
+                  void updateDisplayOption("showNamedTriplets", e.target.checked)
+                }
+              />
+              作業対象列＋名称に値有
             </label>
             <label className={styles.check}>
               <input

@@ -340,9 +340,11 @@ export function shouldIncludeWorkColumn(
   rowByUnique: Record<string, string>,
   headerMap: Record<string, string>,
   colIndex: number,
-  options: Pick<WorkOptions, "lightBlueOnly">
+  options: Pick<WorkOptions, "lightBlueOnly" | "showNamedTriplets">
 ): boolean {
-  const lightBlueOnly = options.lightBlueOnly !== false;
+  const showNamedTriplets = options.showNamedTriplets === true;
+  // 名称表示モードも「作業対象列（水色）」が基準。
+  const lightBlueOnly = showNamedTriplets || options.lightBlueOnly !== false;
 
   if (lightBlueOnly && !isLightBlueWorkColumn(rawHeader, colIndex)) return false;
   if (isMemoWorkColumn(rawHeader)) return false;
@@ -356,6 +358,10 @@ export function shouldIncludeWorkColumn(
       rowByUnique,
       headerMap
     );
+    if (showNamedTriplets) {
+      // 名称に値があれば三つ組（名称/Wiki/正しいwiki）を、空セル・Wiki「-」でも表示。
+      return state !== "empty_name";
+    }
     if (state !== "active") return false;
     return !isCellEmpty(rowByUnique[uniqueName]);
   }
@@ -368,7 +374,8 @@ function expandWikiTripletColumns(
   rawHeaders: string[],
   uniqueHeaders: string[],
   cols: string[],
-  lightBlueOnly: boolean
+  lightBlueOnly: boolean,
+  showNamedTriplets = false
 ): string[] {
   const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
   const colSet = new Set(cols);
@@ -395,17 +402,20 @@ function expandWikiTripletColumns(
     if (okUnique && okUnique in rowByUnique) colSet.add(okUnique);
   }
 
-  for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
-    const nameUnique = headerMap[nameHeader];
-    const wikiUnique = headerMap[wikiHeader];
-    const okUnique = headerMap[okHeader];
-    if (!nameUnique || !(nameUnique in rowByUnique)) continue;
-    if (isCellEmpty(rowByUnique[nameUnique])) continue;
-    if (!wikiUnique || !(wikiUnique in rowByUnique)) continue;
-    if (!isWikiDash(rowByUnique[wikiUnique])) continue;
-    colSet.delete(nameUnique);
-    colSet.delete(wikiUnique);
-    if (okUnique) colSet.delete(okUnique);
+  // 名称表示モードでは Wiki「-」の三つ組も残す（名称に値があれば丸ごと表示）。
+  if (!showNamedTriplets) {
+    for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
+      const nameUnique = headerMap[nameHeader];
+      const wikiUnique = headerMap[wikiHeader];
+      const okUnique = headerMap[okHeader];
+      if (!nameUnique || !(nameUnique in rowByUnique)) continue;
+      if (isCellEmpty(rowByUnique[nameUnique])) continue;
+      if (!wikiUnique || !(wikiUnique in rowByUnique)) continue;
+      if (!isWikiDash(rowByUnique[wikiUnique])) continue;
+      colSet.delete(nameUnique);
+      colSet.delete(wikiUnique);
+      if (okUnique) colSet.delete(okUnique);
+    }
   }
 
   const leading = LEADING.map((h) => headerMap[h]).filter(
@@ -420,7 +430,7 @@ export function workDisplayColumns(
   rowByUnique: Record<string, string>,
   rawHeaders: string[],
   uniqueHeaders: string[],
-  options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode">
+  options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode" | "showNamedTriplets">
 ): string[] {
   const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
   const cols: string[] = [];
@@ -467,7 +477,8 @@ export function workDisplayColumns(
     rawHeaders,
     uniqueHeaders,
     cols,
-    options.lightBlueOnly !== false
+    options.lightBlueOnly !== false || options.showNamedTriplets === true,
+    options.showNamedTriplets === true
   );
 }
 
@@ -657,7 +668,7 @@ export function buildRowPayload(
   rawHeaders: string[],
   uniqueHeaders: string[],
   sheetRowNumber: number,
-  options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode">
+  options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode" | "showNamedTriplets">
 ) {
   const fullEditMode = options.fullEditMode === true;
   let workCols = workDisplayColumns(rowByUnique, rawHeaders, uniqueHeaders, options);

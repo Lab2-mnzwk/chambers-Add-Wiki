@@ -16,9 +16,12 @@ export async function GET(
       request.nextUrl.searchParams.get("lightBlueOnly") !== "false";
     const fullEditMode =
       request.nextUrl.searchParams.get("fullEditMode") === "true";
+    const showNamedTriplets =
+      request.nextUrl.searchParams.get("showNamedTriplets") === "true";
     const payload = await getRow(sheetRowNumber, {
       lightBlueOnly,
       fullEditMode,
+      showNamedTriplets,
     });
     return NextResponse.json(payload);
   } catch (e) {

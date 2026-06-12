@@ -140,7 +140,7 @@ export async function getQueue(
 
 export async function getRow(
   sheetRowNumber: number,
-  options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode">
+  options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode" | "showNamedTriplets">
 ): Promise<RowPayload> {
   const structure = await ensureStructure();
   let rowValues = getRowValues(sheetRowNumber);
