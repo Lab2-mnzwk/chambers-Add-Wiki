@@ -228,6 +228,18 @@
   font-size: 13px;
 }
 
+/* 「Entity値有り」のサブ設定として一段下げて見せる */
+.checkSub {
+  margin-left: 18px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border-panel);
+  font-size: 12px;
+}
+
+.checkSub:has(input:disabled) {
+  opacity: 0.55;
+}
+
 .settings select,
 .settings input[type="number"] {
   width: 100%;

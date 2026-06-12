@@ -220,14 +220,7 @@ export function WorkApp() {
     });
   };
 
-  const updateDisplayOption = async (
-    key: "lightBlueOnly" | "fullEditMode" | "showNamedTriplets",
-    value: boolean
-  ) => {
-    const next = { ...options, [key]: value };
-    // fullEditMode と showNamedTriplets は排他。
-    if (value && key === "fullEditMode") next.showNamedTriplets = false;
-    if (value && key === "showNamedTriplets") next.fullEditMode = false;
+  const applyDisplayOptions = async (next: WorkOptions) => {
     setOptions(next);
     savePrefs(next);
     if (!currentRow) return;
@@ -237,6 +230,29 @@ export function WorkApp() {
       setMessage(String(e), "error");
     }
   };
+
+  // 表示モードの UI 派生状態（内部フラグ showNamedTriplets / lightBlueOnly へ対応）。
+  // Entity値有り: 名称三つ組をセット表示（OFF=全列表示）。
+  // Wiki値「-」を除く: Entity値有りのサブ。wiki_dash（Wiki=「-」）を除外（= active のみ）。
+  const entityValueOn = options.showNamedTriplets || options.lightBlueOnly;
+  const excludeWikiDashOn = !options.showNamedTriplets && options.lightBlueOnly;
+
+  const setEntityValue = (on: boolean) =>
+    void applyDisplayOptions(
+      on
+        ? { ...options, showNamedTriplets: true, lightBlueOnly: false, fullEditMode: false }
+        : { ...options, showNamedTriplets: false, lightBlueOnly: false }
+    );
+
+  const setExcludeWikiDash = (on: boolean) =>
+    void applyDisplayOptions(
+      on
+        ? { ...options, showNamedTriplets: false, lightBlueOnly: true, fullEditMode: false }
+        : { ...options, showNamedTriplets: true, lightBlueOnly: false }
+    );
+
+  const setFullEditMode = (on: boolean) =>
+    void applyDisplayOptions({ ...options, fullEditMode: on });
 
   const goPrev = () => {
     if (historyIndex <= 0) return;
@@ -451,32 +467,26 @@ export function WorkApp() {
             <label className={styles.check}>
               <input
                 type="checkbox"
-                checked={options.lightBlueOnly}
-                disabled={options.fullEditMode || options.showNamedTriplets}
-                onChange={(e) =>
-                  void updateDisplayOption("lightBlueOnly", e.target.checked)
-                }
-              />
-              Wiki確認対象列のみ
-            </label>
-            <label className={styles.check}>
-              <input
-                type="checkbox"
-                checked={options.showNamedTriplets}
+                checked={entityValueOn}
                 disabled={options.fullEditMode}
-                onChange={(e) =>
-                  void updateDisplayOption("showNamedTriplets", e.target.checked)
-                }
+                onChange={(e) => setEntityValue(e.target.checked)}
               />
               Entity値有り
+            </label>
+            <label className={`${styles.check} ${styles.checkSub}`}>
+              <input
+                type="checkbox"
+                checked={excludeWikiDashOn}
+                disabled={options.fullEditMode || !entityValueOn}
+                onChange={(e) => setExcludeWikiDash(e.target.checked)}
+              />
+              Wiki値 - を除く
             </label>
             <label className={styles.check}>
               <input
                 type="checkbox"
                 checked={options.fullEditMode}
-                onChange={(e) =>
-                  void updateDisplayOption("fullEditMode", e.target.checked)
-                }
+                onChange={(e) => setFullEditMode(e.target.checked)}
               />
               列表示・編集（AN〜FT）
             </label>

@@ -42,11 +42,21 @@
 
 設定パネルのレイアウト: **PC は作業者名を含め全項目を常時表示**。**スマホは作業者名のみ常時表示**で、それ以外（表示モード・テーマ・インデックス行数・キュー操作）は「表示設定等」トグルで折り畳む。
 
-| オプション | 既定 | 意味 |
+チェックボックスは上から「完了行をスキップ」「Entity値有り」（サブ:「Wiki値 - を除く」）「列表示・編集（AN〜FT）」の順。
+
+| UI 項目 | 既定 | 意味 |
 |------------|------|------|
-| Wiki確認対象列のみ | ON | AC 以降は水色ヘッダー列（Wiki確認対象列）のみ対象。OFF なら AC 以降の全列が対象。いずれも空セルの列は非表示 |
-| Entity値有り（`showNamedTriplets`） | OFF | 下記「名称三つ組 表示モード」。ON で「Wiki確認対象列のみ」は無効化 |
+| Entity値有り | ON | 名称に値がある Wiki 三つ組を3列セット表示。OFF で全列表示（フィルタなし）。`fullEditMode` ON 時は無効 |
+| └ Wiki値 - を除く（サブ） | ON | 「Entity値有り」の下位設定。ON で Wiki=`-`（wiki_dash）の三つ組を除外（= active のみ）。Entity値有り OFF / `fullEditMode` ON のとき無効 |
 | 列表示・編集（AN〜FT）（`fullEditMode`） | OFF | ON のとき下記の全列編集モード。他の表示項目は無効化 |
+
+UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
+
+| Entity値有り | Wiki値 - を除く | `showNamedTriplets` | `lightBlueOnly` | 表示 |
+|---|---|---|---|---|
+| OFF | （無効） | false | false | 全列表示（AC 以降、データのある列＋active 三つ組セット） |
+| ON | OFF | true | false | 名称有の三つ組セット（wiki_dash 含む） |
+| ON | ON（既定） | false | true | 名称有・Wiki≠`-`（active）の三つ組セットのみ |
 
 ### 名称三つ組 表示モード（`showNamedTriplets`）
 
@@ -74,23 +84,23 @@
 
 ### 列抽出ルール（`shouldIncludeWorkColumn`）
 
-| 条件 | 結果 |
-|------|------|
-| Wiki確認対象列のみ ON かつ非対象列 | 非表示 |
-| memo 列 | 非表示（後段 `filterMemoDisplayColumns` でセクションに応じ追加） |
-| Wiki 三つ組・名称が空（empty_name） | 非表示 |
-| Wiki 三つ組・Wiki が `-`（wiki_dash） | 非表示 |
-| Wiki 三つ組・active・セルに値 | 表示 |
-| Wiki 三つ組・active・セルが空 | 非表示 |
-| その他・セルが空 | 非表示 |
-| その他・セルに値 | 表示 |
+**Wiki 三つ組は常に3列（名称 / Wiki / 正しいwiki）セットで表示/非表示**（個別セルの空・値では分割しない）。状態は `wikiTripletDisplayState`: `empty_name` / `wiki_dash` / `active`。
 
-Wiki 三つ組の状態は `wikiTripletDisplayState`: `empty_name` / `wiki_dash` / `active`。
+| 三つ組の状態 | Entity値有り（`showNamedTriplets`） | Wiki確認対象列のみ（通常） |
+|------|------|------|
+| empty_name（名称が空） | 非表示 | 非表示 |
+| wiki_dash（名称有・Wiki が `-`） | **3列セット表示** | 非表示 |
+| active（名称有・Wiki≠`-`） | 3列セット表示 | 3列セット表示 |
 
-### Wiki 三つ組の追加表示（`expandWikiTripletColumns`）
+- セットで表示する場合、空セルの列も含めて3列とも表示する。
+- 非三つ組列: memo は非表示（後段 `filterMemoDisplayColumns` でセクションに応じ追加）。`lightBlueOnly` ON の非水色列は非表示。その他はセルに値があれば表示。
 
-- 名称に値 **かつ** Wiki に有効値（空・`-` 以外）→ **正しいwiki** 列を追加
-- Wiki が `-` の三つ組は colSet から削除（二重の安全策）
+→ つまり **「Wiki確認対象列のみ」=「Entity値有り」から Wiki が `-` の三つ組を除いたもの**。
+
+### Wiki 三つ組の並び（`expandWikiTripletColumns`）
+
+- セット表示は `shouldIncludeWorkColumn` が3列とも採否を返すため、本関数は主に列順（先頭固定列を先に）を整える。
+- `showNamedTriplets` OFF 時のみ wiki_dash 三つ組を colSet から削除する保険処理を残す（通常は state 判定で既に除外済み）。
 
 ## 編集・保存
 

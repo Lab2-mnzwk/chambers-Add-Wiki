@@ -358,12 +358,13 @@ export function shouldIncludeWorkColumn(
       rowByUnique,
       headerMap
     );
+    // 三つ組は常に3列（名称/Wiki/正しいwiki）セットで表示/非表示。
     if (showNamedTriplets) {
-      // 名称に値があれば三つ組（名称/Wiki/正しいwiki）を、空セル・Wiki「-」でも表示。
+      // 名称に値あり（empty_name 以外）→ Wiki「-」含めセット表示。
       return state !== "empty_name";
     }
-    if (state !== "active") return false;
-    return !isCellEmpty(rowByUnique[uniqueName]);
+    // 確認対象列のみ: active（名称有・Wiki≠「-」）のみセット表示。
+    return state === "active";
   }
 
   return !isCellEmpty(rowByUnique[uniqueName]);
