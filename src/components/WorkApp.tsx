@@ -53,6 +53,18 @@ function rowQuery(options: WorkOptions): string {
   return `lightBlueOnly=${options.lightBlueOnly}&fullEditMode=${options.fullEditMode}&showNamedTriplets=${options.showNamedTriplets}`;
 }
 
+/** 編集内容が読込時のスナップショットから変化しているか（未保存判定）。 */
+function editsDiffer(
+  a: Record<string, string>,
+  b: Record<string, string>
+): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const key of keys) {
+    if ((a[key] ?? "") !== (b[key] ?? "")) return true;
+  }
+  return false;
+}
+
 export function WorkApp() {
   const { data: session, status: sessionStatus } = useSession();
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
@@ -63,6 +75,8 @@ export function WorkApp() {
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [rowPayload, setRowPayload] = useState<RowPayload | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
+  // 読込時の値スナップショット。edits と差があれば「未保存」。
+  const [originalEdits, setOriginalEdits] = useState<Record<string, string>>({});
   const [status, setStatus] = useState("");
   const [statusKind, setStatusKind] = useState<"" | "ok" | "error">("");
   const [loading, setLoading] = useState(false);
@@ -78,6 +92,73 @@ export function WorkApp() {
     if (queueRows.length) return queueRows[queueIndex];
     return null;
   }, [history, historyIndex, queueRows, queueIndex]);
+
+  const dirty = useMemo(
+    () => editsDiffer(edits, originalEdits),
+    [edits, originalEdits]
+  );
+
+  // 背景化・離脱時の自動保存に使う最新値（イベントリスナのクロージャ陳腐化を避ける）。
+  const flushStateRef = useRef({
+    currentRow: null as number | null,
+    edits: {} as Record<string, string>,
+    originalEdits: {} as Record<string, string>,
+    options,
+    queueRows,
+  });
+  useEffect(() => {
+    flushStateRef.current = { currentRow, edits, originalEdits, options, queueRows };
+  }, [currentRow, edits, originalEdits, options, queueRows]);
+
+  // タブ非表示化（visibilitychange=hidden）と離脱（pagehide）で、未保存があれば自動保存。
+  // hidden 時は keepalive fetch（成功で clean 化）、pagehide は sendBeacon（最後の砦）。
+  useEffect(() => {
+    const buildBody = (s: typeof flushStateRef.current) =>
+      JSON.stringify({
+        sheetRowNumber: s.currentRow,
+        worker: s.options.worker,
+        edits: s.edits,
+        queueSheetRows: s.queueRows,
+        options: s.options,
+      });
+
+    const onVisibility = () => {
+      if (document.visibilityState !== "hidden") return;
+      const s = flushStateRef.current;
+      if (!s.currentRow || !editsDiffer(s.edits, s.originalEdits)) return;
+      const cleaned = { ...s.edits };
+      fetch("/api/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: buildBody(s),
+        keepalive: true,
+      })
+        .then((r) => {
+          if (!r.ok) return;
+          flushStateRef.current = { ...flushStateRef.current, originalEdits: cleaned };
+          setOriginalEdits(cleaned);
+        })
+        .catch(() => {});
+    };
+
+    const onPageHide = () => {
+      const s = flushStateRef.current;
+      if (!s.currentRow || !editsDiffer(s.edits, s.originalEdits)) return;
+      if (typeof navigator !== "undefined" && navigator.sendBeacon) {
+        navigator.sendBeacon(
+          "/api/save",
+          new Blob([buildBody(s)], { type: "application/json" })
+        );
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", onPageHide);
+    };
+  }, []);
 
   const setMessage = (text: string, kind: "" | "ok" | "error" = "") => {
     setStatus(text);
@@ -103,6 +184,7 @@ export function WorkApp() {
       if (col.inline) next[col.uniqueName] = col.value;
     }
     setEdits(next);
+    setOriginalEdits(next);
   };
 
   const loadRow = useCallback(
@@ -256,24 +338,72 @@ export function WorkApp() {
   const setFullEditMode = (on: boolean) =>
     void applyDisplayOptions({ ...options, fullEditMode: on });
 
-  const goPrev = () => {
-    if (historyIndex <= 0) return;
-    let nextIndex = historyIndex - 1;
-    if (options.skipDone) {
-      // 最新キュー（patch 反映済みキャッシュ由来）に存在しない行＝完了/対象外として戻り時もスキップ。
-      while (nextIndex >= 0 && !queueRows.includes(history[nextIndex])) {
-        nextIndex -= 1;
-      }
-      if (nextIndex < 0) {
-        showToast("前の未完了行がありません");
-        return;
-      }
+  /**
+   * 現在行に未保存の変更があれば保存する（変更なしは何もしない＝書き込み負荷を抑える）。
+   * 戻り値: ok=保存成功 or 変更なし、失敗時 ok=false。queueRows は保存後の最新キュー。
+   * すべての移動操作はこれを先に await し、ok=false なら移動を中止する。
+   */
+  const saveCurrentIfDirty = async (): Promise<{
+    ok: boolean;
+    queueRows: number[];
+  }> => {
+    if (!currentRow || !dirty) return { ok: true, queueRows };
+    setMessage("保存中…");
+    try {
+      const res = await fetch("/api/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sheetRowNumber: currentRow,
+          worker: options.worker,
+          edits,
+          queueSheetRows: queueRows,
+          options,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "保存に失敗");
+
+      // patch 反映後の最新キューでクライアントの基準を更新（次/前の判定を統一）。
+      const nextQueueRows = (data.queueSheetRows ?? queueRows) as number[];
+      setQueueRows(nextQueueRows);
+      setOriginalEdits(edits);
+      setMessage(`${data.savedCells} セルを保存しました。`, "ok");
+      return { ok: true, queueRows: nextQueueRows };
+    } catch (e) {
+      setMessage(String(e), "error");
+      return { ok: false, queueRows };
     }
-    setHistoryIndex(nextIndex);
-    const row = history[nextIndex];
-    const idx = queueRows.indexOf(row);
-    if (idx >= 0) setQueueIndex(idx);
-    loadRow(row, options).catch((e) => setMessage(String(e), "error"));
+  };
+
+  const goPrev = async () => {
+    if (historyIndex <= 0 || loading) return;
+    setLoading(true);
+    try {
+      const saved = await saveCurrentIfDirty();
+      if (!saved.ok) return;
+      const q = saved.queueRows;
+      let nextIndex = historyIndex - 1;
+      if (options.skipDone) {
+        // 最新キュー（patch 反映済みキャッシュ由来）に存在しない行＝完了/対象外として戻り時もスキップ。
+        while (nextIndex >= 0 && !q.includes(history[nextIndex])) {
+          nextIndex -= 1;
+        }
+        if (nextIndex < 0) {
+          showToast("前の未完了行がありません");
+          return;
+        }
+      }
+      setHistoryIndex(nextIndex);
+      const row = history[nextIndex];
+      const idx = q.indexOf(row);
+      if (idx >= 0) setQueueIndex(idx);
+      await loadRow(row, options);
+    } catch (e) {
+      setMessage(String(e), "error");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const goJump = async () => {
@@ -284,7 +414,13 @@ export function WorkApp() {
       setMessage("行番号は 2 以上を指定してください。", "error");
       return;
     }
+    if (loading) return;
+    setLoading(true);
     try {
+      const saved = await saveCurrentIfDirty();
+      if (!saved.ok) return;
+      const q = saved.queueRows;
+
       setMessage("行を読み込み中…");
       const res = await fetch(`/api/row/${target}?${rowQuery(options)}`);
       const data = await res.json();
@@ -308,9 +444,9 @@ export function WorkApp() {
       nextHistory.push(target);
       setHistory(nextHistory);
       setHistoryIndex(nextHistory.length - 1);
-      const idx = queueRows.indexOf(target);
+      const idx = q.indexOf(target);
       if (idx >= 0) setQueueIndex(idx);
-      if (!queueRows.includes(target)) {
+      if (!q.includes(target)) {
         showToast("現在のキュー外の行です（表示のみ）");
       }
       setRowPayload(payload);
@@ -318,50 +454,45 @@ export function WorkApp() {
       setMessage("");
     } catch (e) {
       setMessage(String(e), "error");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const saveAndNext = async () => {
-    if (!currentRow || loading) return;
+  const goNext = async () => {
+    if (loading) return;
     setLoading(true);
-    setMessage("保存中…");
     try {
-      const res = await fetch("/api/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sheetRowNumber: currentRow,
-          worker: options.worker,
-          edits,
-          queueSheetRows: queueRows,
-          options,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "保存に失敗");
-
-      // patch 反映後の最新キューでクライアントの基準を更新（次/前の判定を統一）。
-      const nextQueueRows = (data.queueSheetRows ?? queueRows) as number[];
-      setQueueRows(nextQueueRows);
-
-      if (data.nextSheetRowNumber) {
-        setMessage(`${data.savedCells} セルを保存しました。`, "ok");
-        const next = data.nextSheetRowNumber as number;
-        const nextHistory = history.slice(0, historyIndex + 1);
-        nextHistory.push(next);
-        setHistory(nextHistory);
-        setHistoryIndex(nextHistory.length - 1);
-        const idx = nextQueueRows.indexOf(next);
-        if (idx >= 0) setQueueIndex(idx);
-        await loadRow(next, options);
-      } else {
-        setMessage("保存しました（キューの末尾です）。", "ok");
+      const saved = await saveCurrentIfDirty();
+      if (!saved.ok) return;
+      const q = saved.queueRows;
+      const next =
+        currentRow != null
+          ? q.find((r) => r > currentRow) ?? null
+          : q[0] ?? null;
+      if (next == null) {
+        setMessage("キューの末尾です。", "ok");
+        return;
       }
+      const nextHistory = history.slice(0, historyIndex + 1);
+      nextHistory.push(next);
+      setHistory(nextHistory);
+      setHistoryIndex(nextHistory.length - 1);
+      const idx = q.indexOf(next);
+      if (idx >= 0) setQueueIndex(idx);
+      await loadRow(next, options);
     } catch (e) {
       setMessage(String(e), "error");
     } finally {
       setLoading(false);
     }
+  };
+
+  // 行内の編集を読込時の値へ戻す（自動保存で確定する前の「取り消し」手段）。
+  const resetEdits = () => {
+    if (!dirty) return;
+    setEdits(originalEdits);
+    setMessage("変更を破棄しました。");
   };
 
   const clearCache = async () => {
@@ -588,18 +719,28 @@ export function WorkApp() {
                   <button
                     type="button"
                     className={styles.navOpen}
+                    disabled={loading}
                     onClick={goJump}
                   >
                     開く
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.secondary}
+                    disabled={!dirty || loading}
+                    onClick={resetEdits}
+                    title="この行の編集を読み込み時の値に戻す"
+                  >
+                    リセット
                   </button>
                 </div>
                 <button
                   type="button"
                   className={styles.navNext}
                   disabled={loading}
-                  onClick={saveAndNext}
+                  onClick={goNext}
                 >
-                  次の行→（保存）
+                  次の行 →
                 </button>
               </div>
             </>
