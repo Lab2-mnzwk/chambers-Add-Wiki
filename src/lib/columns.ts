@@ -9,7 +9,7 @@ import {
   LIGHT_BLUE_WORK_HEADERS,
   MEMO_SECTION_BY_HEADER,
   MEMO_WORK_HEADERS,
-  STATUS_DONE,
+  isDoneStatus,
   STATUS_NOT_STARTED,
   WIKI_TRIPLET_RULES,
   WORK_STATUS_COL_LETTER,
@@ -664,7 +664,7 @@ export function filterQueueRows(
   let filtered = rows;
 
   if (options.skipDone) {
-    filtered = filtered.filter((r) => r.status.trim() !== STATUS_DONE);
+    filtered = filtered.filter((r) => !isDoneStatus(r.status));
   }
 
   // 「全体」は全件表示（Assignee で絞らない）

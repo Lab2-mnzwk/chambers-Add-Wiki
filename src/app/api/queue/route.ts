@@ -8,7 +8,7 @@ function parseOptions(searchParams: URLSearchParams): WorkOptions {
     worker: searchParams.get("worker") ?? "",
     queueFilter: (searchParams.get("queueFilter") ??
       "自分担当") as WorkOptions["queueFilter"],
-    skipDone: searchParams.get("skipDone") !== "false",
+    skipDone: searchParams.get("skipDone") === "true",
     lightBlueOnly: searchParams.get("lightBlueOnly") !== "false",
     showNamedTriplets: searchParams.get("showNamedTriplets") === "true",
     fullEditMode: searchParams.get("fullEditMode") === "true",

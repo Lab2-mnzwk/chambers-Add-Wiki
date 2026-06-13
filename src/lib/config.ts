@@ -48,12 +48,26 @@ export const IDLE_CACHE_CLEAR_MS = (() => {
 
 export const STATUS_NOT_STARTED = "未着手";
 export const STATUS_DONE = "完了";
+/** シート由来の完了バリエーション（正規化変更により完了扱い） */
+export const STATUS_DONE_NORMALIZED = "完了（正規化変更）";
 export const STATUS_NEEDS_REVIEW = "要確認";
 export const WORK_STATUS_OPTIONS = [
   STATUS_NOT_STARTED,
   STATUS_DONE,
+  STATUS_DONE_NORMALIZED,
   STATUS_NEEDS_REVIEW,
 ] as const;
+
+/** 完了とみなすステータス（「完了をスキップ」の対象）。 */
+export const DONE_STATUSES: readonly string[] = [
+  STATUS_DONE,
+  STATUS_DONE_NORMALIZED,
+];
+
+/** ステータスが完了系（「完了」または「完了（正規化変更）」）か。 */
+export function isDoneStatus(status: string): boolean {
+  return DONE_STATUSES.includes(status.trim());
+}
 
 export const LEADING_COLUMN_PAIRS = [
   ["head_page", "tail_page"],

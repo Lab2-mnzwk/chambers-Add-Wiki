@@ -85,9 +85,20 @@ export function WorkApp() {
   const [toast, setToast] = useState("");
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [moreSettingsOpen, setMoreSettingsOpen] = useState(false);
-  const prevQueueIdentityRef = useRef({
-    worker: defaultOptions.worker,
-  });
+  // 直近で「キューに適用済み」の識別子（worker/skipDone/indexRows）。
+  // 適用が成功したときだけ更新する。保存失敗で再読込を中止した場合に、
+  // トグルを直前の適用値へ巻き戻すための基準にも使う。
+  const appliedQueueKeyRef = useRef<{
+    worker: string;
+    skipDone: boolean;
+    indexRows: number;
+  } | null>(null);
+  // プログラムによるトグル巻き戻しで再発火した effect 実行を 1 回だけスキップするフラグ。
+  const revertingQueueOptionRef = useRef(false);
+  // queueRows を書き換える非同期処理の世代カウンタ。
+  // 後発の書込が常に最新。古い in-flight 応答（例: skipDone=ON で算出された
+  // キュー）が後から届いて上書きするのを防ぐ。
+  const queueWriteSeqRef = useRef(0);
 
   const currentRow = useMemo(() => {
     if (historyIndex >= 0 && history[historyIndex]) return history[historyIndex];
@@ -205,11 +216,14 @@ export function WorkApp() {
 
   const loadQueue = useCallback(
     async (opts: WorkOptions, keepPosition: boolean, forceRefresh = false) => {
+      const seq = ++queueWriteSeqRef.current;
       setMessage("キューを読み込み中…");
       const qs = optionsQuery(opts) + (forceRefresh ? "&refresh=true" : "");
       const res = await fetch(`/api/queue?${qs}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "キューの読み込みに失敗");
+      // 自分より後発の queue 書込が始まっていれば、この古い応答は破棄する。
+      if (seq !== queueWriteSeqRef.current) return;
       const rows = (data.sheetRows ?? []) as number[];
       setQueueRows(rows);
 
@@ -283,15 +297,49 @@ export function WorkApp() {
   useEffect(() => {
     if (!bootstrap || bootstrap.authRequired) return;
     if (!options.worker) return;
+
+    // トグル巻き戻しによる再発火はキュー再読込・保存をせず 1 回だけ飲み込む。
+    if (revertingQueueOptionRef.current) {
+      revertingQueueOptionRef.current = false;
+      return;
+    }
+
     savePrefs(options);
 
-    const workerChanged = prevQueueIdentityRef.current.worker !== options.worker;
-    prevQueueIdentityRef.current = {
-      worker: options.worker,
-    };
-
-    const keepPosition = !workerChanged;
-    loadQueue(options, keepPosition).catch((e) => setMessage(String(e), "error"));
+    const prevApplied = appliedQueueKeyRef.current;
+    const workerChanged = prevApplied != null && prevApplied.worker !== options.worker;
+    const keepPosition = prevApplied != null && !workerChanged;
+    void (async () => {
+      // キュー再読込（skipDone/indexRows・作業者変更）の前に未保存編集を自動保存する。
+      // 移動操作と同じ挙動に統一し、再読込で編集（例: Status 変更）が消えるのを防ぐ。
+      const saved = await saveCurrentIfDirty();
+      if (!saved.ok) {
+        // 保存失敗時はトグル状態とキューが食い違わないよう、直前の適用値へ巻き戻す。
+        if (
+          prevApplied &&
+          (prevApplied.worker !== options.worker ||
+            prevApplied.skipDone !== options.skipDone ||
+            prevApplied.indexRows !== options.indexRows)
+        ) {
+          revertingQueueOptionRef.current = true;
+          const reverted = {
+            ...options,
+            worker: prevApplied.worker,
+            skipDone: prevApplied.skipDone,
+            indexRows: prevApplied.indexRows,
+          };
+          setOptions(reverted);
+          savePrefs(reverted);
+        }
+        return;
+      }
+      appliedQueueKeyRef.current = {
+        worker: options.worker,
+        skipDone: options.skipDone,
+        indexRows: options.indexRows,
+      };
+      await loadQueue(options, keepPosition);
+    })().catch((e) => setMessage(String(e), "error"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bootstrap, options.worker, options.skipDone, options.indexRows]);
 
@@ -307,6 +355,9 @@ export function WorkApp() {
   };
 
   const applyDisplayOptions = async (next: WorkOptions) => {
+    // 表示モード変更で行を再読込する前に未保存編集を自動保存（編集消失を防ぐ）。
+    const saved = await saveCurrentIfDirty();
+    if (!saved.ok) return;
     setOptions(next);
     savePrefs(next);
     if (!currentRow) return;
@@ -350,6 +401,7 @@ export function WorkApp() {
     queueRows: number[];
   }> => {
     if (!currentRow || !dirty) return { ok: true, queueRows };
+    const seq = ++queueWriteSeqRef.current;
     setMessage("保存中…");
     try {
       const res = await fetch("/api/save", {
@@ -367,8 +419,10 @@ export function WorkApp() {
       if (!res.ok) throw new Error(data.error ?? "保存に失敗");
 
       // patch 反映後の最新キューでクライアントの基準を更新（次/前の判定を統一）。
+      // ただし、この保存より後にキュー再読込が始まっていれば state 反映はしない
+      // （古い応答での上書き防止）。戻り値 queueRows は呼び出し側の移動判定に使う。
       const nextQueueRows = (data.queueSheetRows ?? queueRows) as number[];
-      setQueueRows(nextQueueRows);
+      if (seq === queueWriteSeqRef.current) setQueueRows(nextQueueRows);
       setOriginalEdits(edits);
       setMessage(`${data.savedCells} セルを保存しました。`, "ok");
       return { ok: true, queueRows: nextQueueRows };
