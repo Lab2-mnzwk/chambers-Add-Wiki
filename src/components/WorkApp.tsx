@@ -68,7 +68,9 @@ function editsDiffer(
 export function WorkApp() {
   const { data: session, status: sessionStatus } = useSession();
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
-  const [options, setOptions] = useState<WorkOptions>(loadStoredOptions);
+  // 初期値は決定論的な defaultOptions（SSR と一致させハイドレーション不一致を防ぐ）。
+  // localStorage の保存値はマウント後の loadPrefs で反映する。
+  const [options, setOptions] = useState<WorkOptions>(defaultOptions);
   const [queueRows, setQueueRows] = useState<number[]>([]);
   const [queueIndex, setQueueIndex] = useState(0);
   const [history, setHistory] = useState<number[]>([]);
