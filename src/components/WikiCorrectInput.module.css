@@ -68,7 +68,12 @@
 }
 
 .hint {
-  margin-top: 4px;
   font-size: 11px;
-  color: var(--work-letter);
+  color: var(--work-tooltip-text);
+  background: var(--work-tooltip-bg);
+  border: 1px solid var(--work-tooltip-border);
+  border-radius: 6px;
+  box-shadow: var(--work-tooltip-shadow);
+  padding: 6px 10px;
+  z-index: 10;
 }

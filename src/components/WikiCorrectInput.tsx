@@ -24,8 +24,26 @@ export function WikiCorrectInput({
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [menuPos, setMenuPos] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 候補メニューはテーブルの overflow でクリップされるため position:fixed で
+  // コンテナ外に描画する。テキストエリアの実座標へ追従させる。
+  const MENU_MIN_WIDTH = 280;
+  const updateMenuPos = useCallback(() => {
+    const el = taRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const width = Math.max(r.width, MENU_MIN_WIDTH);
+    const left = Math.min(r.left, window.innerWidth - width - 8);
+    setMenuPos({ top: r.bottom + 4, left: Math.max(8, left), width });
+  }, []);
 
   const fetchSuggestions = useCallback(
     async (query: string): Promise<WikiHistorySuggestion[]> => {
@@ -117,9 +135,26 @@ export function WikiCorrectInput({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
+  // 開いている間はスクロール/リサイズに合わせてメニュー位置を更新する。
+  useEffect(() => {
+    if (!open) {
+      setMenuPos(null);
+      return;
+    }
+    updateMenuPos();
+    const onMove = () => updateMenuPos();
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [open, suggestions, updateMenuPos]);
+
   return (
     <div className={styles.wrap} ref={wrapRef}>
       <textarea
+        ref={taRef}
         className={styles.textarea}
         value={value}
         onFocus={() => {
@@ -132,8 +167,18 @@ export function WikiCorrectInput({
           scheduleFetch(e.target.value);
         }}
       />
-      {open && suggestions.length > 0 && (
-        <ul className={styles.suggestions} role="listbox">
+      {open && menuPos && suggestions.length > 0 && (
+        <ul
+          className={styles.suggestions}
+          role="listbox"
+          style={{
+            position: "fixed",
+            top: menuPos.top,
+            left: menuPos.left,
+            width: menuPos.width,
+            right: "auto",
+          }}
+        >
           {suggestions.map((s) => (
             <li key={s.correctWiki}>
               <button
@@ -160,8 +205,17 @@ export function WikiCorrectInput({
           ))}
         </ul>
       )}
-      {open && !loading && tripletName && suggestions.length === 0 && (
-        <div className={styles.hint}>履歴候補なし</div>
+      {open && menuPos && !loading && tripletName && suggestions.length === 0 && (
+        <div
+          className={styles.hint}
+          style={{
+            position: "fixed",
+            top: menuPos.top,
+            left: menuPos.left,
+          }}
+        >
+          履歴候補なし
+        </div>
       )}
     </div>
   );
