@@ -24,7 +24,7 @@ const defaultOptions: WorkOptions = {
   lightBlueOnly: false,
   showNamedTriplets: true,
   fullEditMode: false,
-  indexRows: 10000,
+  indexRows: 30000,
 };
 
 function loadStoredOptions(): WorkOptions {
@@ -281,15 +281,25 @@ export function WorkApp() {
   }, [loadPrefs, sessionStatus, session?.user?.email]);
 
   useEffect(() => {
-    if (!bootstrap || bootstrap.authRequired || !bootstrap.discordNames.length) {
-      return;
-    }
+    if (!bootstrap || bootstrap.authRequired) return;
     setOptions((prev) => {
-      if (prev.worker && bootstrap.discordNames.includes(prev.worker)) {
-        return prev;
+      let next = prev;
+      // 作業者の既定補完（保存値が一覧に無ければ先頭の作業者にする）。
+      if (
+        bootstrap.discordNames.length &&
+        !(prev.worker && bootstrap.discordNames.includes(prev.worker))
+      ) {
+        next = { ...next, worker: bootstrap.discordNames[0] };
       }
-      const next = { ...prev, worker: bootstrap.discordNames[0] };
-      savePrefs(next);
+      // インデックス行数をサーバー既定（シート全行をカバー）まで引き上げる。
+      // localStorage に古い小さい値（例: 10000）が残るユーザーもシート全行が対象になる。
+      if (
+        bootstrap.defaultIndexRows &&
+        prev.indexRows < bootstrap.defaultIndexRows
+      ) {
+        next = { ...next, indexRows: bootstrap.defaultIndexRows };
+      }
+      if (next !== prev) savePrefs(next);
       return next;
     });
   }, [bootstrap, savePrefs]);
@@ -694,11 +704,11 @@ export function WorkApp() {
             <input
               type="number"
               min={100}
-              max={10000}
-              step={100}
+              max={Math.max(bootstrap?.defaultIndexRows ?? 0, 30000)}
+              step={1000}
               value={options.indexRows}
               onChange={(e) =>
-                updateOption("indexRows", Number(e.target.value) || 10000)
+                updateOption("indexRows", Number(e.target.value) || 30000)
               }
             />
 

@@ -19,8 +19,10 @@ export const SPREADSHEET_ID = resolveSpreadsheetId(process.env.SPREADSHEET_ID);
 /** 画面上部に表示するスプレッドシート名（API のファイル名とは別に固定可） */
 export const SPREADSHEET_DISPLAY_TITLE =
   process.env.SPREADSHEET_DISPLAY_TITLE ?? "PJ140_wiki付与_view_test";
-export const SHEET_NAME = "wiki付与作業シート（第一弾）";
-export const ASSIGN_SHEET_NAME = "アサイン";
+/** 作業シートのタブ名。シート名変更に備え環境変数 SHEET_NAME で上書き可能。 */
+export const SHEET_NAME =
+  process.env.SHEET_NAME ?? "wiki付与作業シート（第一弾、第二弾）";
+export const ASSIGN_SHEET_NAME = process.env.ASSIGN_SHEET_NAME ?? "アサイン";
 export const DISCORD_NAME_COLUMN = "discord名";
 /** アサインシートの discord名 列に含まれる作業者以外の集計ラベル（作業者リストから除外） */
 export const ASSIGN_NAME_EXCLUDE = ["合計", "端数チェック（総件数との差）"];
@@ -80,7 +82,15 @@ export const LEADING_FIXED_HEADERS = LEADING_COLUMN_PAIRS.flat();
 export const WORK_TABLE_START_HEADER = "ENTITY_NAME";
 export const WORK_STATUS_COL_LETTER = "FG";
 export const WORK_ASSIGNEE_COL_LETTER = "FH";
-export const DEFAULT_INDEX_ROWS = 10000;
+/**
+ * キュー index / Wiki 履歴で読み取る最大データ行数（2行目以降）。
+ * シート全行をカバーする必要があるため、行数増加に備え環境変数 DEFAULT_INDEX_ROWS で上書き可能。
+ * 既定 30000（現行〜将来の総行数を包含）。
+ */
+export const DEFAULT_INDEX_ROWS = (() => {
+  const raw = Number(process.env.DEFAULT_INDEX_ROWS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 30000;
+})();
 export const WRITE_DENYLIST_COL_LETTERS = new Set(["AE"]);
 
 /** 全列表示・編集モード: 表示する列の範囲（列レター, 両端含む） */

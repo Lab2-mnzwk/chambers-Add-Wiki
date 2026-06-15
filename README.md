@@ -1,6 +1,6 @@
 # Wiki付与 行作業ビュー（pj140）
 
-Google スプレッドシート「wiki付与作業シート（第一弾）」の行単位 Wiki 付与作業 UI（**Next.js**）。
+Google スプレッドシート「wiki付与作業シート（第一弾、第二弾）」の行単位 Wiki 付与作業 UI（**Next.js**）。
 
 ## 必要なもの
 

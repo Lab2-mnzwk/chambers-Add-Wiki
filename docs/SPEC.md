@@ -3,7 +3,7 @@
 正本実装はリポジトリ直下の **Next.js アプリ**（`src/`）。
 
 - スプレッドシート ID: `1Mc3pX949vlO_uxWpimn7_DsUAYr87GmroqXft6fvB4I`
-- 作業シート: `wiki付与作業シート（第一弾）`
+- 作業シート: `wiki付与作業シート（第一弾、第二弾）`（`SHEET_NAME`。環境変数で上書き可。シート名変更時はこの値のみ変更すればよい）
 - Status: FG列（`Status` / `Status.1`）。選択肢は `未着手` / `完了` / `完了（正規化変更）` / `要確認`（`WORK_STATUS_OPTIONS`、シートのドロップダウンと同順）。
 - Assignee: FH列（`Assignee`）
 - **完了系ステータス**: `完了` と `完了（正規化変更）` は完了扱い（`DONE_STATUSES` / `isDoneStatus`）。「完了行をスキップ」は両方を除外する。
@@ -48,7 +48,7 @@
 
 設定パネルのレイアウト: **PC は作業者名を含め全項目を常時表示**。**スマホは作業者名のみ常時表示**で、それ以外（表示モード・テーマ・インデックス行数・キュー操作）は「表示設定等」トグルで折り畳む。
 
-設定の保持: ブラウザの **localStorage**（キー `wikiWorkNext`）に保存（端末/ブラウザ単位。サーバー側の個人別保存はなし）。初回（localStorage 無し）の既定（`defaultOptions`）は **作業者名=「全件表示」/ 完了行スキップ ON / Entity値有り ON / Wiki値 - を除く OFF / 列表示・編集 OFF / indexRows 10000**。
+設定の保持: ブラウザの **localStorage**（キー `wikiWorkNext`）に保存（端末/ブラウザ単位。サーバー側の個人別保存はなし）。初回（localStorage 無し）の既定（`defaultOptions`）は **作業者名=「全件表示」/ 完了行スキップ ON / Entity値有り ON / Wiki値 - を除く OFF / 列表示・編集 OFF / indexRows 30000**。なお `indexRows` は **シート全行をカバーするための取得上限**で、サーバー既定 `DEFAULT_INDEX_ROWS`（既定 30000、環境変数で上書き可）に揃える。bootstrap 時に localStorage の古い小さい値（例: 10000）はサーバー既定まで自動的に引き上げられる（超過行が取り込まれない不具合の防止）。
 
 チェックボックスは上から「完了行をスキップ」「Entity値有り」（サブ:「Wiki値 - を除く」）「列表示・編集（AN〜FT）」の順。
 
