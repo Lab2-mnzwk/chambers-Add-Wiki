@@ -304,6 +304,20 @@ export function WorkApp() {
     });
   }, [bootstrap, savePrefs]);
 
+  // 正しいWiki補完インデックスの事前ウォームアップ。
+  // 行表示前にサーバー側キャッシュ（全行 batchGet）を構築しておき、
+  // 入力欄の先読み候補がキャッシュヒットで即返るようにする。
+  // indexRows ごとに 1 回だけ実行する（移行で値が変わったら再ウォームアップ）。
+  const wikiWarmedRowsRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!bootstrap || bootstrap.authRequired) return;
+    if (wikiWarmedRowsRef.current === options.indexRows) return;
+    wikiWarmedRowsRef.current = options.indexRows;
+    void fetch(
+      `/api/wiki-history?name=&indexRows=${options.indexRows}`
+    ).catch(() => {});
+  }, [bootstrap, options.indexRows]);
+
   useEffect(() => {
     if (!bootstrap || bootstrap.authRequired) return;
     if (!options.worker) return;

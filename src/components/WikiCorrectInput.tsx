@@ -28,10 +28,10 @@ export function WikiCorrectInput({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchSuggestions = useCallback(
-    async (query: string) => {
+    async (query: string): Promise<WikiHistorySuggestion[]> => {
       if (!tripletName.trim()) {
         setSuggestions([]);
-        return;
+        return [];
       }
       setLoading(true);
       try {
@@ -42,11 +42,13 @@ export function WikiCorrectInput({
           indexRows: String(indexRows),
         });
         const resp = await fetch(`/api/wiki-history?${params}`);
-        if (!resp.ok) return;
+        if (!resp.ok) return [];
         const data = (await resp.json()) as {
           suggestions: WikiHistorySuggestion[];
         };
-        setSuggestions(data.suggestions ?? []);
+        const list = data.suggestions ?? [];
+        setSuggestions(list);
+        return list;
       } finally {
         setLoading(false);
       }
@@ -70,9 +72,23 @@ export function WikiCorrectInput({
     };
   }, []);
 
+  // 行表示時（三つ組が変わったら）に候補を先読みし、候補があればドロップダウンを
+  // 自動で開く。フォーカスを待たず、行を開くと同時に候補を表示する（fetchSuggestions は
+  // tripletName / tripletWiki / indexRows が変わると再生成される）。
   useEffect(() => {
-    if (!suggestions.length) {
-      setTitles({});
+    if (!tripletName.trim()) return;
+    // 名称がある三つ組は、候補の有無にかかわらず行表示と同時に開く。
+    // 候補があれば一覧を、無ければ「履歴候補なし」を欄内に表示する。
+    setOpen(true);
+    void fetchSuggestions(value);
+    // value は依存に含めない（入力中の再取得は onChange→scheduleFetch が担当）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchSuggestions]);
+
+  // リンクプレビュー（タイトル）の取得はドロップダウンを開いた時のみ。
+  // 先読みで全行・全候補のプレビューを大量取得しないようにする。
+  useEffect(() => {
+    if (!open || !suggestions.length) {
       return;
     }
 
@@ -89,7 +105,7 @@ export function WikiCorrectInput({
     return () => {
       cancelled = true;
     };
-  }, [suggestions]);
+  }, [suggestions, open]);
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
