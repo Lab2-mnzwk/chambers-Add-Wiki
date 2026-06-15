@@ -80,8 +80,12 @@ export const LEADING_COLUMN_PAIRS = [
 export const LEADING_FIXED_HEADERS = LEADING_COLUMN_PAIRS.flat();
 
 export const WORK_TABLE_START_HEADER = "ENTITY_NAME";
-export const WORK_STATUS_COL_LETTER = "FG";
-export const WORK_ASSIGNEE_COL_LETTER = "FH";
+// 作業 Status / Assignee の既定位置（フォールバック用）。
+// 実際の解決は「Assignee 列の直前の Status を作業 Status とする」名前＋隣接ベース
+// （resolveWorkStatusUnique / resolveWorkAssigneeUnique）を優先。シート列増減時はこの解決が追従し、
+// レターは effectiveColCount / フォールバックでのみ参照する。
+export const WORK_STATUS_COL_LETTER = "GJ";
+export const WORK_ASSIGNEE_COL_LETTER = "GK";
 /**
  * キュー index / Wiki 履歴で読み取る最大データ行数（2行目以降）。
  * シート全行をカバーする必要があるため、行数増加に備え環境変数 DEFAULT_INDEX_ROWS で上書き可能。
@@ -185,6 +189,23 @@ export function buildWikiTripletRules(): [string, string, string][] {
 }
 
 export const WIKI_TRIPLET_RULES = buildWikiTripletRules();
+
+/**
+ * 各三つ組（名称列ヘッダー）に対応する deweyID 列ヘッダー。
+ * 例: A_name1 → A_deweyID1 / A_6 → A_deweyID6 / P-T_1 → P-T_deweyID1。
+ * deweyID 列自体は表示しない（「deweyID有りを除く」判定にのみ使用）。
+ */
+export function buildWikiDeweyByName(): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (let i = 1; i <= 5; i++) map[`A_name${i}`] = `A_deweyID${i}`;
+  for (let i = 6; i <= 8; i++) map[`A_${i}`] = `A_deweyID${i}`;
+  for (let i = 1; i <= 5; i++) map[`Pl_name${i}`] = `Pl_deweyID${i}`;
+  for (let i = 1; i <= 7; i++) map[`P-T_${i}`] = `P-T_deweyID${i}`;
+  for (let i = 1; i <= 9; i++) map[`Te_name${i}`] = `Te_deweyID${i}`;
+  return map;
+}
+
+export const WIKI_DEWEY_BY_NAME = buildWikiDeweyByName();
 
 export function workSheetEditUrl(): string {
   return `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/edit`;

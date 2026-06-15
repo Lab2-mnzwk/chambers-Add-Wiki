@@ -4,8 +4,10 @@
 
 - スプレッドシート ID: `1Mc3pX949vlO_uxWpimn7_DsUAYr87GmroqXft6fvB4I`
 - 作業シート: `wiki付与作業シート（第一弾、第二弾）`（`SHEET_NAME`。環境変数で上書き可。シート名変更時はこの値のみ変更すればよい）
-- Status: FG列（`Status` / `Status.1`）。選択肢は `未着手` / `完了` / `完了（正規化変更）` / `要確認`（`WORK_STATUS_OPTIONS`、シートのドロップダウンと同順）。
-- Assignee: FH列（`Assignee`）
+- Status: 作業 Status（`Assignee` 列の直前の `Status`、現状 GJ 列）。選択肢は `未着手` / `完了` / `完了（正規化変更）` / `要確認`（`WORK_STATUS_OPTIONS`、シートのドロップダウンと同順）。
+  - シート前方に別の `Status`（エンティティ Status＝AE 列、値は `Done - 変更有り/なし` 等）が存在するが、**作業 Status とは別物**。解決は「**Assignee 列の直前の `Status`**」を優先する隣接ベース（`resolveWorkStatusUnique`）で、列の増減（deweyID 挿入等）でも追従。エンティティ Status（AE）は無視・**書込禁止**（`WRITE_DENYLIST`）。
+- Assignee: 作業 Assignee（`Assignee` 列。現状 GK 列。名前で解決）
+- **deweyID 列**: 各三つ組は `名称 / deweyID / Wiki / 正しいwiki` の並び。deweyID 列自体は**表示しない**が、「deweyID有りを除く」判定に使う（`WIKI_DEWEY_BY_NAME`）。`-`・空は「値無し」扱い。
 - **完了系ステータス**: `完了` と `完了（正規化変更）` は完了扱い（`DONE_STATUSES` / `isDoneStatus`）。「完了行をスキップ」は両方を除外する。
 
 ## 作業表 — 表示列
@@ -48,23 +50,23 @@
 
 設定パネルのレイアウト: **PC は作業者名を含め全項目を常時表示**。**スマホは作業者名のみ常時表示**で、それ以外（表示モード・テーマ・インデックス行数・キュー操作）は「表示設定等」トグルで折り畳む。
 
-設定の保持: ブラウザの **localStorage**（キー `wikiWorkNext`）に保存（端末/ブラウザ単位。サーバー側の個人別保存はなし）。初回（localStorage 無し）の既定（`defaultOptions`）は **作業者名=「全件表示」/ 完了行スキップ ON / Entity値有り ON / Wiki値 - を除く OFF / 列表示・編集 OFF / indexRows 30000**。なお `indexRows` は **シート全行をカバーするための取得上限**で、サーバー既定 `DEFAULT_INDEX_ROWS`（既定 30000、環境変数で上書き可）に揃える。bootstrap 時に localStorage の古い小さい値（例: 10000）はサーバー既定まで自動的に引き上げられる（超過行が取り込まれない不具合の防止）。
+設定の保持: ブラウザの **localStorage**（キー `wikiWorkNext`）に保存（端末/ブラウザ単位。サーバー側の個人別保存はなし）。初回（localStorage 無し）の既定（`defaultOptions`）は **作業者名=「全件表示」/ 完了行スキップ ON / Entity値有り ON / deweyID有りを除く OFF / 列表示・編集 OFF / indexRows 30000**。なお `indexRows` は **シート全行をカバーするための取得上限**で、サーバー既定 `DEFAULT_INDEX_ROWS`（既定 30000、環境変数で上書き可）に揃える。bootstrap 時に localStorage の古い小さい値（例: 10000）はサーバー既定まで自動的に引き上げられる（超過行が取り込まれない不具合の防止）。
 
-チェックボックスは上から「完了行をスキップ」「Entity値有り」（サブ:「Wiki値 - を除く」）「列表示・編集（AN〜FT）」の順。
+チェックボックスは上から「完了行をスキップ」「Entity値有り」（サブ:「deweyID有りを除く」）「列表示・編集（AN〜FT）」の順。
 
 | UI 項目 | 既定 | 意味 |
 |------------|------|------|
 | Entity値有り | ON | 名称に値がある Wiki 三つ組を3列セット表示。OFF で全列表示（フィルタなし）。`fullEditMode` ON 時は無効 |
-| └ Wiki値 - を除く（サブ） | ON | 「Entity値有り」の下位設定。ON で Wiki=`-`（wiki_dash）の三つ組を除外（= active のみ）。Entity値有り OFF / `fullEditMode` ON のとき無効 |
+| └ deweyID有りを除く（サブ） | ON | 「Entity値有り」の下位設定。ON で **deweyID に値がある三つ組（=ID で同定済み＝判断不要）を除外**し、名称有 かつ deweyID 無（空/`-`）の組のみ表示。Entity値有り OFF / `fullEditMode` ON のとき無効 |
 | 列表示・編集（AN〜FT）（`fullEditMode`） | OFF | ON のとき下記の全列編集モード。他の表示項目は無効化 |
 
 UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 
-| Entity値有り | Wiki値 - を除く | `showNamedTriplets` | `lightBlueOnly` | 表示 |
+| Entity値有り | deweyID有りを除く | `showNamedTriplets` | `lightBlueOnly` | 表示 |
 |---|---|---|---|---|
 | OFF | （無効） | false | false | 全列表示（AC 以降の全列をフィルタなしで表示。空列・三つ組も全部、memo/status 補完なし） |
-| ON | OFF | true | false | 名称有の三つ組セット（wiki_dash 含む） |
-| ON | ON（既定） | false | true | 名称有・Wiki≠`-`（active）の三つ組セットのみ |
+| ON | OFF | true | false | 名称有の三つ組セット（Wiki=`-`・deweyID 有無を問わず全部） |
+| ON | ON（既定） | false | true | 名称有 **かつ deweyID 無（空/`-`）** の三つ組セットのみ（ID 有＝判断不要を除外） |
 
 ### 名称三つ組 表示モード（`showNamedTriplets`）
 
@@ -76,6 +78,8 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 - 編集可否は通常モードと同じ（正しいwiki は編集可、名称・Wiki は読取）。
 
 ### 列表示・編集モード（`fullEditMode`）
+
+> ⚠️ **未追従（要対応）**: 下記のレター固定範囲は旧レイアウト基準。第二弾で各三つ組に deweyID 列が挿入され全体が +29 列シフトしたため、`fullEditMode` の表示/編集/非表示範囲は現行シートとズレている。通常モード（Entity値有り / deweyID有りを除く / 全列表示）は名前ベースで追従済みだが、`fullEditMode` の範囲再生成は別途対応予定。
 
 - 表示: 先頭固定列 + **AN〜FT** の全列（値・水色・Wiki ルールを無視して必ず表示）。memo フィルタ・Wiki 三つ組の追加/除外も適用しない。
   - ただし `FULL_EDIT_HIDDEN_RANGES` の列は範囲内でも非表示（BC〜BK / BM〜BV / CS〜DB / DO〜DQ / DS〜EB / ET〜FC / FE〜FF / FI / FK / FM / FO / FQ / FS）。
@@ -92,18 +96,19 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 
 ### 列抽出ルール（`shouldIncludeWorkColumn`）
 
-**Wiki 三つ組は常に3列（名称 / Wiki / 正しいwiki）セットで表示/非表示**（個別セルの空・値では分割しない）。状態は `wikiTripletDisplayState`: `empty_name` / `wiki_dash` / `active`。
+**Wiki 三つ組は常に3列（名称 / Wiki / 正しいwiki）セットで表示/非表示**（個別セルの空・値では分割しない）。表示/非表示は「名称の有無」と、通常モードでは「deweyID の有無」で決まる。
 
-| 三つ組の状態 | Entity値有り（`showNamedTriplets`） | Wiki確認対象列のみ（通常） |
+| 三つ組の状態 | Entity値有り（`showNamedTriplets`） | deweyID有りを除く（通常） |
 |------|------|------|
-| empty_name（名称が空） | 非表示 | 非表示 |
-| wiki_dash（名称有・Wiki が `-`） | **3列セット表示** | 非表示 |
-| active（名称有・Wiki≠`-`） | 3列セット表示 | 3列セット表示 |
+| 名称が空 | 非表示 | 非表示 |
+| 名称有・deweyID 有（空/`-` 以外） | **3列セット表示** | **非表示**（判断不要） |
+| 名称有・deweyID 無（空/`-`） | 3列セット表示 | 3列セット表示 |
 
-- セットで表示する場合、空セルの列も含めて3列とも表示する。
+- セットで表示する場合、空セルの列も含めて3列（名称/Wiki/正しいwiki）とも表示する（deweyID 列は表示しない）。
+- deweyID 有無の判定は `tripletDeweyHasValue`（`WIKI_DEWEY_BY_NAME` で名称列→deweyID 列を対応付け。値が空または `-` は「無し」扱い）。
 - 非三つ組列: memo は非表示（後段 `filterMemoDisplayColumns` でセクションに応じ追加）。`lightBlueOnly` ON の非水色列は非表示。その他はセルに値があれば表示。
 
-→ つまり **「Wiki確認対象列のみ」=「Entity値有り」から Wiki が `-` の三つ組を除いたもの**。
+→ つまり **「deweyID有りを除く」=「Entity値有り」から deweyID に値がある三つ組（同定済み＝判断不要）を除いたもの**。
 
 ### Wiki 三つ組の並び（`expandWikiTripletColumns`）
 

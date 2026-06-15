@@ -17,7 +17,7 @@ const PREFS_KEY = "wikiWorkNext";
 
 const defaultOptions: WorkOptions = {
   // 初回（localStorage 無し）の既定。作業者名は「全件表示」、
-  // 表示は Entity値有り ON / Wiki値 - を除く OFF。
+  // 表示は Entity値有り ON / deweyID有りを除く OFF。
   worker: ASSIGN_ALL_ROWS_NAME,
   queueFilter: "自分担当",
   skipDone: true,
@@ -380,9 +380,9 @@ export function WorkApp() {
 
   // 表示モードの UI 派生状態（内部フラグ showNamedTriplets / lightBlueOnly へ対応）。
   // Entity値有り: 名称三つ組をセット表示（OFF=全列表示）。
-  // Wiki値「-」を除く: Entity値有りのサブ。wiki_dash（Wiki=「-」）を除外（= active のみ）。
+  // deweyID有りを除く: Entity値有りのサブ。deweyID に値がある組（=判断不要）を除外。
   const entityValueOn = options.showNamedTriplets || options.lightBlueOnly;
-  const excludeWikiDashOn = !options.showNamedTriplets && options.lightBlueOnly;
+  const excludeDeweyOn = !options.showNamedTriplets && options.lightBlueOnly;
 
   const setEntityValue = (on: boolean) =>
     void applyDisplayOptions(
@@ -391,7 +391,7 @@ export function WorkApp() {
         : { ...options, showNamedTriplets: false, lightBlueOnly: false }
     );
 
-  const setExcludeWikiDash = (on: boolean) =>
+  const setExcludeDewey = (on: boolean) =>
     void applyDisplayOptions(
       on
         ? { ...options, showNamedTriplets: false, lightBlueOnly: true, fullEditMode: false }
@@ -675,11 +675,11 @@ export function WorkApp() {
             <label className={`${styles.check} ${styles.checkSub}`}>
               <input
                 type="checkbox"
-                checked={excludeWikiDashOn}
+                checked={excludeDeweyOn}
                 disabled={options.fullEditMode || !entityValueOn}
-                onChange={(e) => setExcludeWikiDash(e.target.checked)}
+                onChange={(e) => setExcludeDewey(e.target.checked)}
               />
-              Wiki値 - を除く
+              deweyID有りを除く
             </label>
             <label className={styles.check}>
               <input

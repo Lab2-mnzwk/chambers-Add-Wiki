@@ -11,6 +11,7 @@ import {
   MEMO_WORK_HEADERS,
   isDoneStatus,
   STATUS_NOT_STARTED,
+  WIKI_DEWEY_BY_NAME,
   WIKI_TRIPLET_RULES,
   WORK_STATUS_COL_LETTER,
   WORK_ASSIGNEE_COL_LETTER,
@@ -260,6 +261,15 @@ export function resolveWorkStatusUnique(
   rawHeaders: string[],
   uniqueHeaders: string[]
 ): string | null {
+  // 作業 Status = Assignee 列の直前にある "Status"（隣接ベース）。
+  // これにより、シート前方にある別の "Status"（エンティティ Status＝AE 等）を誤検出せず、
+  // 列の増減（deweyID 挿入等）で位置がずれても追従する。
+  for (let i = 1; i < rawHeaders.length; i++) {
+    if (rawHeaders[i] === COL_ASSIGNEE && rawHeaders[i - 1] === "Status") {
+      return uniqueHeaders[i - 1];
+    }
+  }
+  // フォールバック: 既定レター位置の "Status"。
   for (let i = 0; i < rawHeaders.length; i++) {
     if (isWorkStatusColumn(rawHeaders[i], i + 1)) {
       return uniqueHeaders[i];
@@ -268,16 +278,13 @@ export function resolveWorkStatusUnique(
   return uniqueHeaders.includes(COL_STATUS_WORK) ? COL_STATUS_WORK : null;
 }
 
-/** FH列の Assignee（unique 名は Assignee または Assignee.1 など） */
+/** 作業 Assignee 列（名前で特定。通常シート上に1つ） */
 export function resolveWorkAssigneeUnique(
   rawHeaders: string[],
   uniqueHeaders: string[]
 ): string | null {
   for (let i = 0; i < rawHeaders.length; i++) {
-    if (
-      columnLetter(i + 1) === WORK_ASSIGNEE_COL_LETTER &&
-      rawHeaders[i] === COL_ASSIGNEE
-    ) {
+    if (rawHeaders[i] === COL_ASSIGNEE) {
       return uniqueHeaders[i];
     }
   }
@@ -329,10 +336,29 @@ export function wikiTripletDisplayState(
 }
 
 /**
+ * 三つ組の deweyID 列に値があるか（空・`-` は「値無し」扱い）。
+ * 「deweyID有りを除く」モードの判定にのみ使用（deweyID 列自体は表示しない）。
+ */
+export function tripletDeweyHasValue(
+  nameHeader: string,
+  rowByUnique: Record<string, string>,
+  headerMap: Record<string, string>
+): boolean {
+  const deweyHeader = WIKI_DEWEY_BY_NAME[nameHeader];
+  if (!deweyHeader) return false;
+  const unique = headerMap[deweyHeader];
+  if (!unique || !(unique in rowByUnique)) return false;
+  const v = String(rowByUnique[unique] ?? "").trim();
+  return v !== "" && v !== "-";
+}
+
+/**
  * AC 以降の作業列を表示するか。
  * - 水色列のみ は options.lightBlueOnly で制御
  * - 空セルの列は非表示
- * - Wiki 三つ組: active（名称あり・Wiki が `-` 以外）かつ値ありのみ表示
+ * - Wiki 三つ組（名称/Wiki/正しいwiki）は常に3列セットで表示/非表示
+ *   - Entity値有り: 名称に値あり → セット表示
+ *   - deweyID有りを除く: 名称に値あり かつ deweyID 無（空/`-`）のみ表示（ID 有＝判断不要として除外）
  */
 export function shouldIncludeWorkColumn(
   rawHeader: string,
@@ -358,13 +384,11 @@ export function shouldIncludeWorkColumn(
       rowByUnique,
       headerMap
     );
-    // 三つ組は常に3列（名称/Wiki/正しいwiki）セットで表示/非表示。
-    if (showNamedTriplets) {
-      // 名称に値あり（empty_name 以外）→ Wiki「-」含めセット表示。
-      return state !== "empty_name";
-    }
-    // 確認対象列のみ: active（名称有・Wiki≠「-」）のみセット表示。
-    return state === "active";
+    if (state === "empty_name") return false;
+    // Entity値有り: 名称に値あり → Wiki「-」含めセット表示。
+    if (showNamedTriplets) return true;
+    // deweyID有りを除く: 名称有 かつ deweyID 無（空/`-`）のみセット表示。
+    return !tripletDeweyHasValue(nameHeader, rowByUnique, headerMap);
   }
 
   return !isCellEmpty(rowByUnique[uniqueName]);
@@ -381,17 +405,15 @@ function expandWikiTripletColumns(
   const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
   const colSet = new Set(cols);
 
-  for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
+  for (const [nameHeader, , okHeader] of WIKI_TRIPLET_RULES) {
     const nameUnique = headerMap[nameHeader];
-    const wikiUnique = headerMap[wikiHeader];
     if (!nameUnique || !(nameUnique in rowByUnique)) continue;
-    if (!wikiUnique || !(wikiUnique in rowByUnique)) continue;
-    if (
-      isCellEmpty(rowByUnique[nameUnique]) ||
-      !hasDisplayWikiValue(rowByUnique[wikiUnique])
-    ) {
-      continue;
-    }
+    if (isCellEmpty(rowByUnique[nameUnique])) continue;
+    // 可視セット: Entity値有り=名称有 / deweyID有りを除く=名称有 かつ deweyID 無。
+    const visible =
+      showNamedTriplets ||
+      !tripletDeweyHasValue(nameHeader, rowByUnique, headerMap);
+    if (!visible) continue;
     if (!rawHeaders.includes(okHeader)) continue;
     if (
       lightBlueOnly &&
@@ -403,7 +425,7 @@ function expandWikiTripletColumns(
     if (okUnique && okUnique in rowByUnique) colSet.add(okUnique);
   }
 
-  // 名称表示モードでは Wiki「-」の三つ組も残す（名称に値があれば丸ごと表示）。
+  // 「deweyID有りを除く」モードでは deweyID 有りの三つ組をセットごと除外する。
   if (!showNamedTriplets) {
     for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
       const nameUnique = headerMap[nameHeader];
@@ -411,10 +433,9 @@ function expandWikiTripletColumns(
       const okUnique = headerMap[okHeader];
       if (!nameUnique || !(nameUnique in rowByUnique)) continue;
       if (isCellEmpty(rowByUnique[nameUnique])) continue;
-      if (!wikiUnique || !(wikiUnique in rowByUnique)) continue;
-      if (!isWikiDash(rowByUnique[wikiUnique])) continue;
+      if (!tripletDeweyHasValue(nameHeader, rowByUnique, headerMap)) continue;
       colSet.delete(nameUnique);
-      colSet.delete(wikiUnique);
+      if (wikiUnique) colSet.delete(wikiUnique);
       if (okUnique) colSet.delete(okUnique);
     }
   }
