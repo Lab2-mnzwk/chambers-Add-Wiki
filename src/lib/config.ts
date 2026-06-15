@@ -97,28 +97,35 @@ export const DEFAULT_INDEX_ROWS = (() => {
 })();
 export const WRITE_DENYLIST_COL_LETTERS = new Set(["AE"]);
 
-/** 全列表示・編集モード: 表示する列の範囲（列レター, 両端含む） */
-export const FULL_EDIT_DISPLAY_RANGE: [string, string] = ["AN", "FT"];
-/** 全列表示・編集モード: 自由入力で編集可能にする列レター範囲（両端含む） */
+/**
+ * 全列表示・編集モード: 表示する列の範囲（列レター, 両端含む）。
+ * 第二弾レイアウト（各三つ組に deweyID 列が挿入され末尾が GU まで拡張）に対応。
+ * 三つ組は4列セット（名称 / deweyID / Wiki / 正しいwiki）として表示・編集する。
+ */
+export const FULL_EDIT_DISPLAY_RANGE: [string, string] = ["AN", "GU"];
+/**
+ * 全列表示・編集モード: 自由入力で編集可能にする列レター範囲（両端含む）。
+ * deweyID を含む4列セット・memo・役割列（Action〜Purpose）を編集可にする。
+ * Status(GJ)＝ドロップダウン / Assignee(GK)＝読取 は範囲外に置き自由入力対象から除外。
+ */
 export const FULL_EDIT_COLUMN_RANGES: [string, string][] = [
-  ["AN", "FD"],
-  ["FJ", "FT"],
+  ["AN", "GI"],
+  ["GM", "GU"],
 ];
-/** 全列表示・編集モード: 表示範囲内でも非表示にする列レター範囲（両端含む） */
+/**
+ * 全列表示・編集モード: 表示範囲内でも非表示にする列レター範囲（両端含む）。
+ * 集約名 / _auto / _lang / Entity数 / wiki結合 などのヘルパー列を隠す。
+ */
 export const FULL_EDIT_HIDDEN_RANGES: [string, string][] = [
-  ["BC", "BK"],
-  ["BM", "BV"],
-  ["CS", "DB"],
-  ["DO", "DQ"],
-  ["DS", "EB"],
-  ["ET", "FC"],
-  ["FE", "FF"],
-  ["FI", "FI"],
-  ["FK", "FK"],
-  ["FM", "FM"],
-  ["FO", "FO"],
-  ["FQ", "FQ"],
-  ["FS", "FS"],
+  ["BU", "CD"], // A_Entity数・A_Wiki結合・_Agent_Category__auto_lang・Patient-Theme 集約/auto 群
+  ["DH", "DQ"], // P-T_Entity数・P-T_wiki結合・_lang・Place 集約/auto 群
+  ["EM", "EV"], // Pl_Entity数・Pl_wiki結合・_lang・Territory 集約/auto 群
+  ["GH", "GI"], // Te_Entity数・Te_wiki結合
+  ["GL", "GL"], // _Territory_Category__auto_lang
+  ["GN", "GN"], // _Action_lang
+  ["GP", "GP"], // _Instrument_lang
+  ["GR", "GR"], // _Manner_lang
+  ["GT", "GT"], // _Cause_lang
 ];
 
 export const MEMO_WORK_HEADERS = [

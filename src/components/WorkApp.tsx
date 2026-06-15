@@ -701,7 +701,7 @@ export function WorkApp() {
                 checked={options.fullEditMode}
                 onChange={(e) => setFullEditMode(e.target.checked)}
               />
-              列表示・編集（AN〜FT）
+              列表示・編集（AN〜GU）
             </label>
 
             <label className={styles.label}>表示テーマ</label>

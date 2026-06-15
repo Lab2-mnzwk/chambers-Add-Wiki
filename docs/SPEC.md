@@ -52,13 +52,13 @@
 
 設定の保持: ブラウザの **localStorage**（キー `wikiWorkNext`）に保存（端末/ブラウザ単位。サーバー側の個人別保存はなし）。初回（localStorage 無し）の既定（`defaultOptions`）は **作業者名=「全件表示」/ 完了行スキップ ON / Entity値有り ON / deweyID有りを除く OFF / 列表示・編集 OFF / indexRows 30000**。なお `indexRows` は **シート全行をカバーするための取得上限**で、サーバー既定 `DEFAULT_INDEX_ROWS`（既定 30000、環境変数で上書き可）に揃える。bootstrap 時に localStorage の古い小さい値（例: 10000）はサーバー既定まで自動的に引き上げられる（超過行が取り込まれない不具合の防止）。
 
-チェックボックスは上から「完了行をスキップ」「Entity値有り」（サブ:「deweyID有りを除く」）「列表示・編集（AN〜FT）」の順。
+チェックボックスは上から「完了行をスキップ」「Entity値有り」（サブ:「deweyID有りを除く」）「列表示・編集（AN〜GU）」の順。
 
 | UI 項目 | 既定 | 意味 |
 |------------|------|------|
 | Entity値有り | ON | 名称に値がある Wiki 三つ組を3列セット表示。OFF で全列表示（フィルタなし）。`fullEditMode` ON 時は無効 |
 | └ deweyID有りを除く（サブ） | ON | 「Entity値有り」の下位設定。ON で **deweyID に値がある三つ組（=ID で同定済み＝判断不要）を除外**し、名称有 かつ deweyID 無（空/`-`）の組のみ表示。Entity値有り OFF / `fullEditMode` ON のとき無効 |
-| 列表示・編集（AN〜FT）（`fullEditMode`） | OFF | ON のとき下記の全列編集モード。他の表示項目は無効化 |
+| 列表示・編集（AN〜GU）（`fullEditMode`） | OFF | ON のとき下記の全列編集モード。他の表示項目は無効化 |
 
 UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 
@@ -79,19 +79,22 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 
 ### 列表示・編集モード（`fullEditMode`）
 
-> ⚠️ **未追従（要対応）**: 下記のレター固定範囲は旧レイアウト基準。第二弾で各三つ組に deweyID 列が挿入され全体が +29 列シフトしたため、`fullEditMode` の表示/編集/非表示範囲は現行シートとズレている。通常モード（Entity値有り / deweyID有りを除く / 全列表示）は名前ベースで追従済みだが、`fullEditMode` の範囲再生成は別途対応予定。
+第二弾レイアウト（各三つ組に deweyID 列が挿入され末尾が **GU** まで拡張）に対応。Wiki 三つ組は **4列セット（名称 / deweyID / Wiki / 正しいwiki）** として表示・編集する。
 
-- 表示: 先頭固定列 + **AN〜FT** の全列（値・水色・Wiki ルールを無視して必ず表示）。memo フィルタ・Wiki 三つ組の追加/除外も適用しない。
-  - ただし `FULL_EDIT_HIDDEN_RANGES` の列は範囲内でも非表示（BC〜BK / BM〜BV / CS〜DB / DO〜DQ / DS〜EB / ET〜FC / FE〜FF / FI / FK / FM / FO / FQ / FS）。
-- 編集: **AN〜FD** と **FJ〜FT** を自由入力テキストで編集可（`isFullEditableColIndex`）。
-  - 間の **FE〜FI**（Status=FG・Assignee=FH を含む）は自由入力対象外。Status はドロップダウン、Assignee は読取のまま。
+- 表示: 先頭固定列 + **AN〜GU** の全列（値・水色・Wiki ルールを無視して必ず表示）。memo フィルタ・Wiki 三つ組の追加/除外も適用しない。
+  - ただし `FULL_EDIT_HIDDEN_RANGES` の **ヘルパー列**（集約名 / `_auto` / `_lang` / `Entity数` / `wiki結合`）は範囲内でも非表示: BU〜CD / DH〜DQ / EM〜EV / GH〜GI / GL / GN / GP / GR / GT。
+  - 結果: 4グループ（Agent / Patient-Theme / Place / Territory）の全三つ組4列セット・各 memo・Status・Assignee・役割列（Action〜Purpose）が表示される。
+- 編集: **AN〜GI** と **GM〜GU** を自由入力テキストで編集可（`isFullEditableColIndex`）。deweyID 列も4列セットの一部として自由入力編集できる。
+  - **Status（GJ）はドロップダウン**、**Assignee（GK）は読取**。両者は編集レター範囲の外に置いて自由入力対象から除外（間の GH〜GI・GL は非表示ヘルパー）。
   - 書込禁止列（`WRITE_DENYLIST_COL_LETTERS`、現状 AE）は範囲外につき影響なし。
-- 範囲定数: `FULL_EDIT_DISPLAY_RANGE` / `FULL_EDIT_COLUMN_RANGES` / `FULL_EDIT_HIDDEN_RANGES`（`src/lib/config.ts`）。
+  - 非表示列は UI に出ないため編集されず、書き込まれない（編集レター範囲に含まれていても実害なし）。
+- 範囲定数: `FULL_EDIT_DISPLAY_RANGE`（AN/GU）/ `FULL_EDIT_COLUMN_RANGES`（AN-GI, GM-GU）/ `FULL_EDIT_HIDDEN_RANGES`（`src/lib/config.ts`）。
+- ⚠️ これらはレター固定のため、将来シート列が増減した場合は再生成が必要（通常モードは名前ベースで追従）。
 
 #### 保存時の書き込み（`fullEditMode` ON）
 
-- 表示中かつ編集可（AN〜FD・FJ〜FT、非表示列を除く）のセルに入力した値が、**自由入力テキスト**としてシートへ書き込まれる（`buildWritePlan` に `fullEditMode=true` を渡し、`isWritableColumn` が当該範囲を許可）。
-- Status（FG）は従来通りドロップダウン値を書き込み。Assignee（FH）・FE〜FI のその他・非表示列・AE は書き込まない。
+- 表示中かつ編集可（AN〜GI・GM〜GU、非表示列を除く）のセルに入力した値が、**自由入力テキスト**としてシートへ書き込まれる（`buildWritePlan` に `fullEditMode=true` を渡し、`isWritableColumn` が当該範囲を許可）。
+- Status（GJ）は従来通りドロップダウン値を書き込み。Assignee（GK）・非表示ヘルパー列・AE は書き込まない。
 - 保存契機・UI は通常モードと同じ（移動操作に連動した自動保存。「編集・保存」参照）。
 
 ### 列抽出ルール（`shouldIncludeWorkColumn`）
