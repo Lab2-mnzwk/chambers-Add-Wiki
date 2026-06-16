@@ -10,6 +10,7 @@ import {
   COL_ASSIGNEE,
   COL_STATUS_WORK,
   DISCORD_NAME_COLUMN,
+  isDoneStatus,
   SHEET_NAME,
   SPREADSHEET_ID,
 } from "./config";
@@ -22,7 +23,7 @@ import {
 } from "./columns";
 import { requireGoogleAccessToken } from "./google-session";
 import type { SheetStructure } from "./types";
-import { listWikiTripletColumns } from "./wiki-history";
+import { listWikiTripletColumns, type WikiHistoryRawRow } from "./wiki-history";
 
 let serviceAccountSheets: sheets_v4.Sheets | null = null;
 
@@ -196,7 +197,7 @@ export async function fetchQueueIndex(
 export async function fetchWikiHistoryFromSheet(
   structure: SheetStructure,
   indexRows: number
-): Promise<Array<{ name: string; wiki: string; correctWiki: string }>> {
+): Promise<WikiHistoryRawRow[]> {
   const tripletCols = listWikiTripletColumns(structure);
   if (!tripletCols.length) return [];
 
@@ -216,12 +217,33 @@ export async function fetchWikiHistoryFromSheet(
 
   if (!ranges.length) return [];
 
+  // 「完了行で正しいWiki空欄 = Wiki値正しい」の判定用に作業 Status 列も読む。
+  const statusUnique =
+    resolveWorkStatusUnique(structure.rawHeaders, structure.uniqueHeaders) ??
+    null;
+  let statusRangeIndex = -1;
+  if (statusUnique) {
+    const sIdx = structure.uniqueHeaders.indexOf(statusUnique);
+    if (sIdx >= 0) {
+      const letter = columnLetter(sIdx + 1);
+      statusRangeIndex = ranges.length;
+      ranges.push(`'${SHEET_NAME}'!${letter}${startRow}:${letter}${endRow}`);
+    }
+  }
+
   const batch = await sheets.spreadsheets.values.batchGet({
     spreadsheetId: SPREADSHEET_ID,
     ranges,
   });
 
-  const results: Array<{ name: string; wiki: string; correctWiki: string }> = [];
+  const statusCol =
+    statusRangeIndex >= 0
+      ? (batch.data.valueRanges?.[statusRangeIndex]?.values ?? []).map((row) =>
+          String(row[0] ?? "").trim()
+        )
+      : [];
+
+  const results: WikiHistoryRawRow[] = [];
 
   for (let t = 0; t < tripletCols.length; t++) {
     const base = t * 3;
@@ -240,8 +262,11 @@ export async function fetchWikiHistoryFromSheet(
       const name = nameCol[i] ?? "";
       const wiki = wikiCol[i] ?? "";
       const correctWiki = okCol[i] ?? "";
-      if (!name || !wiki || !correctWiki) continue;
-      results.push({ name, wiki, correctWiki });
+      if (!name || !wiki) continue;
+      const done = isDoneStatus(statusCol[i] ?? "");
+      // 正しいWiki が値ありの行、または完了行（空欄正解判定用）だけ残す。
+      if (correctWiki === "" && !done) continue;
+      results.push({ name, wiki, correctWiki, done });
     }
   }
 

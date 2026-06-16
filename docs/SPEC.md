@@ -142,12 +142,12 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 
 正しいwiki セルの入力時に、過去の確定値を候補表示する補完機能。
 
-- **候補の生成元**: 作業シートを走査し、`名称 + Wiki + 正しいwiki` がすべて揃い、正しいwiki が URL の三つ組を集計（`aggregateWikiHistory`）。同一 `名称/Wiki/正しいwiki` は件数を加算。インデックス行数は `indexRows`。
+- **候補の生成元**: 作業シートを走査し、`名称 + Wiki` がある三つ組について正しいwiki の値を集計（`aggregateWikiHistory`）。候補対象は **URL** / **`-`（該当なし）** / **空欄（=Wiki値正しい、ただし作業 Status 完了行のみ）** の3種。同一 `名称/Wiki/正しいwiki` は件数を加算。インデックス行数は `indexRows`。詳細は `docs/WIKI_HISTORY.md`。
 - **候補の絞り込み**（`suggestWikiHistory`）: 編集中セルの行の `名称`（必要に応じ `Wiki`）をキーに照合。
   - `exact`（name+wiki 一致）を優先、続いて `name のみ一致`。各々 件数降順、最大 8 件。
   - 入力中テキストでさらに部分一致フィルタ（250ms デバウンス）。
-- **表示**: 各候補は `タイトル|URL`（タイトルは `/api/link-preview` で取得）と一致種別・件数を表示。クリックでセルへ反映。
-- **学習（保存時マージ）**: 保存で正しいwiki 列が更新されると、その `名称/Wiki/正しいwiki` をメモリ上の履歴インデックスへ追記（`mergeWikiHistoryFromSave`）。次回以降の候補に反映される。
+- **表示**: 各候補は `タイトル|URL`（タイトルは `/api/link-preview` で取得）または `「-」（Wiki該当なし）` / `Wiki値正しい`（空欄正解）と、一致種別・件数を表示。クリックでセルへ反映（空欄正解はセルを空に）。
+- **学習（保存時マージ）**: 保存で正しいwiki 列が更新されると、その `名称/Wiki/正しいwiki`（URL/`-`）をメモリ上の履歴インデックスへ追記（`mergeWikiHistoryFromSave`）。さらに **Status を完了に変更した保存**では、空欄のままの三つ組を「Wiki値正しい」として学習（`mergeBlankCorrectEntry`）。次回以降の候補に反映される。
 
 ## 作業者名リスト（`loadAssignDiscordNames`）
 

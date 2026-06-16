@@ -1,6 +1,14 @@
 import type { SheetStructure } from "./types";
-import { isCellEmpty, isHttpUrl, resolveHeaderToUnique } from "./columns";
-import { WIKI_TRIPLET_RULES } from "./config";
+import {
+  isCellEmpty,
+  isHttpUrl,
+  resolveHeaderToUnique,
+  resolveWorkStatusUnique,
+} from "./columns";
+import { isDoneStatus, WIKI_TRIPLET_RULES } from "./config";
+
+/** 「Wiki値そのまま正解（正しいWiki空欄）」を表す内部 correctWiki 値（空文字）。 */
+export const BLANK_CORRECT_VALUE = "";
 
 export type WikiHistoryEntry = {
   name: string;
@@ -22,6 +30,15 @@ export type WikiHistoryIndex = {
   builtAt: number;
   entries: WikiHistoryEntry[];
 };
+
+/**
+ * 履歴候補として残す正しいwiki 値か。
+ * URL に加え、「Wiki が誤りで該当なし」を表す `-` も候補対象にする。
+ */
+export function isHistoryCorrectWikiValue(value: string): boolean {
+  const v = value.trim();
+  return v === "-" || isHttpUrl(v);
+}
 
 export function normalizeHistoryText(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
@@ -47,26 +64,43 @@ function entryKey(name: string, wiki: string, correctWiki: string): string {
   ].join("\0");
 }
 
+export type WikiHistoryRawRow = {
+  name: string;
+  wiki: string;
+  correctWiki: string;
+  /** その行の作業 Status が完了系か（空欄正解＝Wiki値正しいの判定に使用）。 */
+  done: boolean;
+};
+
 /** 生データから重複を集計した履歴インデックスを作る */
 export function aggregateWikiHistory(
-  raw: Array<{ name: string; wiki: string; correctWiki: string }>,
+  raw: WikiHistoryRawRow[],
   indexRows: number
 ): WikiHistoryIndex {
   const map = new Map<string, WikiHistoryEntry>();
 
-  for (const row of raw) {
-    const name = row.name.trim();
-    const wiki = row.wiki.trim();
-    const correctWiki = row.correctWiki.trim();
-    if (!name || !wiki || !correctWiki) continue;
-    if (!isHttpUrl(correctWiki)) continue;
-
+  const upsert = (name: string, wiki: string, correctWiki: string) => {
     const key = entryKey(name, wiki, correctWiki);
     const existing = map.get(key);
     if (existing) {
       existing.count += 1;
     } else {
       map.set(key, { name, wiki, correctWiki, count: 1 });
+    }
+  };
+
+  for (const row of raw) {
+    const name = row.name.trim();
+    const wiki = row.wiki.trim();
+    const correctWiki = row.correctWiki.trim();
+    if (!name || !wiki) continue;
+
+    if (isHistoryCorrectWikiValue(correctWiki)) {
+      // URL または「-」を正解として集計。
+      upsert(name, wiki, correctWiki);
+    } else if (correctWiki === "" && row.done) {
+      // 完了行で正しいWiki空欄 = 「Wiki値そのまま正解」を学習。
+      upsert(name, wiki, BLANK_CORRECT_VALUE);
     }
   }
 
@@ -103,6 +137,26 @@ export function extractWikiHistoryFromRow(
   return found;
 }
 
+function upsertHistoryEntry(
+  index: WikiHistoryIndex,
+  name: string,
+  wiki: string,
+  correctWiki: string
+): WikiHistoryIndex {
+  const key = entryKey(name, wiki, correctWiki);
+  const entries = [...index.entries];
+  const existing = entries.find(
+    (e) => entryKey(e.name, e.wiki, e.correctWiki) === key
+  );
+  if (existing) {
+    existing.count += 1;
+  } else {
+    entries.push({ name, wiki, correctWiki, count: 1 });
+  }
+  entries.sort((a, b) => b.count - a.count);
+  return { ...index, entries, builtAt: Date.now() };
+}
+
 export function mergeWikiHistoryEntry(
   index: WikiHistoryIndex,
   name: string,
@@ -112,27 +166,27 @@ export function mergeWikiHistoryEntry(
   const trimmedName = name.trim();
   const trimmedWiki = wiki.trim();
   const trimmedCorrect = correctWiki.trim();
-  if (!trimmedName || !trimmedWiki || !trimmedCorrect || !isHttpUrl(trimmedCorrect)) {
+  if (
+    !trimmedName ||
+    !trimmedWiki ||
+    !trimmedCorrect ||
+    !isHistoryCorrectWikiValue(trimmedCorrect)
+  ) {
     return index;
   }
+  return upsertHistoryEntry(index, trimmedName, trimmedWiki, trimmedCorrect);
+}
 
-  const key = entryKey(trimmedName, trimmedWiki, trimmedCorrect);
-  const entries = [...index.entries];
-  const existing = entries.find(
-    (e) => entryKey(e.name, e.wiki, e.correctWiki) === key
-  );
-  if (existing) {
-    existing.count += 1;
-  } else {
-    entries.push({
-      name: trimmedName,
-      wiki: trimmedWiki,
-      correctWiki: trimmedCorrect,
-      count: 1,
-    });
-  }
-  entries.sort((a, b) => b.count - a.count);
-  return { ...index, entries, builtAt: Date.now() };
+/** 完了行で正しいWiki空欄 =「Wiki値そのまま正解」を履歴へマージ */
+export function mergeBlankCorrectEntry(
+  index: WikiHistoryIndex,
+  name: string,
+  wiki: string
+): WikiHistoryIndex {
+  const trimmedName = name.trim();
+  const trimmedWiki = wiki.trim();
+  if (!trimmedName || !trimmedWiki) return index;
+  return upsertHistoryEntry(index, trimmedName, trimmedWiki, BLANK_CORRECT_VALUE);
 }
 
 /** 保存された正しいwiki 列だけ履歴にマージ */
@@ -146,18 +200,31 @@ export function mergeWikiHistoryFromSave(
   const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
   let result = index;
 
+  // 今回の保存で作業 Status が完了系に変更されたか。完了確定時に、
+  // 名称・Wiki があり正しいWiki空欄の三つ組を「Wiki値正しい」として学習する。
+  const statusUnique = resolveWorkStatusUnique(rawHeaders, uniqueHeaders);
+  const statusDoneNow =
+    !!statusUnique &&
+    editedUniqueNames.has(statusUnique) &&
+    isDoneStatus(String(rowByUnique[statusUnique] ?? ""));
+
   for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
     const okUnique = headerMap[okHeader];
-    if (!okUnique || !editedUniqueNames.has(okUnique)) continue;
-
     const nameUnique = headerMap[nameHeader];
     const wikiUnique = headerMap[wikiHeader];
-    if (!nameUnique || !wikiUnique) continue;
+    if (!okUnique || !nameUnique || !wikiUnique) continue;
 
     const name = String(rowByUnique[nameUnique] ?? "").trim();
     const wiki = String(rowByUnique[wikiUnique] ?? "").trim();
     const correctWiki = String(rowByUnique[okUnique] ?? "").trim();
-    result = mergeWikiHistoryEntry(result, name, wiki, correctWiki);
+
+    if (editedUniqueNames.has(okUnique)) {
+      result = mergeWikiHistoryEntry(result, name, wiki, correctWiki);
+    }
+    // 正しいWiki空欄のまま完了にした三つ組を学習（保存即時反映）。
+    if (statusDoneNow && name && wiki && correctWiki === "") {
+      result = mergeBlankCorrectEntry(result, name, wiki);
+    }
   }
 
   return result;

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchLinkPreviewTitleClient } from "@/lib/link-preview-client";
+import { isHttpUrl } from "@/lib/columns";
 import type { WikiHistorySuggestion } from "@/lib/wiki-history";
 import styles from "./WikiCorrectInput.module.css";
 
@@ -90,8 +91,7 @@ export function WikiCorrectInput({
     };
   }, []);
 
-  // 行表示時（三つ組が変わったら）に候補を先読みし、候補があればドロップダウンを
-  // 自動で開く。フォーカスを待たず、行を開くと同時に候補を表示する（fetchSuggestions は
+  // 行表示時（三つ組が変わったら）に候補を先読みする（fetchSuggestions は
   // tripletName / tripletWiki / indexRows が変わると再生成される）。
   useEffect(() => {
     // 行表示・三つ組変更時は候補を先読みするが、ドロップダウンは開かない。
@@ -116,7 +116,10 @@ export function WikiCorrectInput({
     let cancelled = false;
     void Promise.all(
       suggestions.map(async (s) => {
-        const title = await fetchLinkPreviewTitleClient(s.correctWiki);
+        // URL でない候補（「-」＝該当なし）はプレビュー取得しない。
+        const title = isHttpUrl(s.correctWiki)
+          ? await fetchLinkPreviewTitleClient(s.correctWiki)
+          : "";
         return [s.correctWiki, title] as const;
       })
     ).then((entries) => {
@@ -196,7 +199,7 @@ export function WikiCorrectInput({
           </button>
           <ul className={styles.suggestions} role="listbox">
             {suggestions.map((s) => (
-              <li key={s.correctWiki}>
+              <li key={s.correctWiki || "__blank_correct__"}>
                 <button
                   type="button"
                   className={styles.item}
@@ -208,7 +211,11 @@ export function WikiCorrectInput({
                   }}
                 >
                   <div className={styles.url}>
-                    {titles[s.correctWiki]
+                    {s.correctWiki === ""
+                      ? "Wiki値正しい"
+                      : s.correctWiki === "-"
+                      ? "「-」（Wiki該当なし）"
+                      : titles[s.correctWiki]
                       ? `${titles[s.correctWiki]}|${s.correctWiki}`
                       : s.correctWiki}
                   </div>
