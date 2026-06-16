@@ -565,8 +565,9 @@ export function WorkApp() {
       let q = saved.queueRows;
       let cursor = original;
       while (true) {
+        const from = cursor;
         const next =
-          cursor != null ? q.find((r) => r > cursor) ?? null : q[0] ?? null;
+          from != null ? q.find((r) => r > from) ?? null : q[0] ?? null;
         if (next == null) {
           setMessage("キューの末尾です。", "ok");
           if (original != null && cursor !== original) {
