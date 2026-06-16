@@ -11,7 +11,7 @@ import type {
   WorkOptions,
 } from "@/lib/types";
 import { applyTheme, loadThemeMode, type ThemeMode } from "@/lib/theme";
-import { ASSIGN_ALL_ROWS_NAME } from "@/lib/config";
+import { ASSIGN_ALL_ROWS_NAME, isDoneStatus } from "@/lib/config";
 
 const PREFS_KEY = "wikiWorkNext";
 
@@ -190,6 +190,10 @@ export function WorkApp() {
   const savePrefs = useCallback((next: WorkOptions) => {
     localStorage.setItem(PREFS_KEY, JSON.stringify(next));
   }, []);
+
+  /** 読み込んだ行のライブな作業 Status 値（GJ 列）。判定不能時は空。 */
+  const rowStatusOf = (payload: RowPayload): string =>
+    payload.columns.find((c) => c.isStatus)?.value ?? "";
 
   const syncEditsFromPayload = (payload: RowPayload) => {
     const next: Record<string, string> = {};
@@ -459,26 +463,36 @@ export function WorkApp() {
   const goPrev = async () => {
     if (historyIndex <= 0 || loading) return;
     setLoading(true);
+    const original = currentRow;
     try {
       const saved = await saveCurrentIfDirty();
       if (!saved.ok) return;
-      const q = saved.queueRows;
+      let q = saved.queueRows;
       let nextIndex = historyIndex - 1;
-      if (options.skipDone) {
-        // 最新キュー（patch 反映済みキャッシュ由来）に存在しない行＝完了/対象外として戻り時もスキップ。
-        while (nextIndex >= 0 && !q.includes(history[nextIndex])) {
+      while (nextIndex >= 0) {
+        const row = history[nextIndex];
+        // 最新キューに存在しない行＝完了/対象外としてスキップ。
+        if (options.skipDone && !q.includes(row)) {
           nextIndex -= 1;
+          continue;
         }
-        if (nextIndex < 0) {
-          showToast("前の未完了行がありません");
-          return;
+        const payload = await loadRow(row, options);
+        // スナップショットが古くてもライブ status が完了なら戻り時もスキップ。
+        if (options.skipDone && isDoneStatus(rowStatusOf(payload))) {
+          q = q.filter((r) => r !== row);
+          setQueueRows(q);
+          nextIndex -= 1;
+          continue;
         }
+        setHistoryIndex(nextIndex);
+        const idx = q.indexOf(row);
+        if (idx >= 0) setQueueIndex(idx);
+        break;
       }
-      setHistoryIndex(nextIndex);
-      const row = history[nextIndex];
-      const idx = q.indexOf(row);
-      if (idx >= 0) setQueueIndex(idx);
-      await loadRow(row, options);
+      if (nextIndex < 0) {
+        showToast("前の未完了行がありません");
+        if (original != null) await loadRow(original, options);
+      }
     } catch (e) {
       setMessage(String(e), "error");
     } finally {
@@ -542,25 +556,40 @@ export function WorkApp() {
   const goNext = async () => {
     if (loading) return;
     setLoading(true);
+    const original = currentRow;
     try {
       const saved = await saveCurrentIfDirty();
       if (!saved.ok) return;
-      const q = saved.queueRows;
-      const next =
-        currentRow != null
-          ? q.find((r) => r > currentRow) ?? null
-          : q[0] ?? null;
-      if (next == null) {
-        setMessage("キューの末尾です。", "ok");
-        return;
+      // キュー・スナップショットは古い可能性がある（外部/別セッションでの完了など）。
+      // 移動先のライブ status が完了なら、その行をスナップショットから外して次へ進む。
+      let q = saved.queueRows;
+      let cursor = original;
+      while (true) {
+        const next =
+          cursor != null ? q.find((r) => r > cursor) ?? null : q[0] ?? null;
+        if (next == null) {
+          setMessage("キューの末尾です。", "ok");
+          if (original != null && cursor !== original) {
+            await loadRow(original, options);
+          }
+          return;
+        }
+        const payload = await loadRow(next, options);
+        if (options.skipDone && isDoneStatus(rowStatusOf(payload))) {
+          // getRow がサーバ index を自己修復済み。ローカルでも除外して次を探す。
+          q = q.filter((r) => r !== next);
+          setQueueRows(q);
+          cursor = next;
+          continue;
+        }
+        const nextHistory = history.slice(0, historyIndex + 1);
+        nextHistory.push(next);
+        setHistory(nextHistory);
+        setHistoryIndex(nextHistory.length - 1);
+        const idx = q.indexOf(next);
+        if (idx >= 0) setQueueIndex(idx);
+        break;
       }
-      const nextHistory = history.slice(0, historyIndex + 1);
-      nextHistory.push(next);
-      setHistory(nextHistory);
-      setHistoryIndex(nextHistory.length - 1);
-      const idx = q.indexOf(next);
-      if (idx >= 0) setQueueIndex(idx);
-      await loadRow(next, options);
     } catch (e) {
       setMessage(String(e), "error");
     } finally {
