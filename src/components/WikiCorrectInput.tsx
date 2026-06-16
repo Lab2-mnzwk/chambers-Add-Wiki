@@ -94,10 +94,13 @@ export function WikiCorrectInput({
   // 自動で開く。フォーカスを待たず、行を開くと同時に候補を表示する（fetchSuggestions は
   // tripletName / tripletWiki / indexRows が変わると再生成される）。
   useEffect(() => {
-    if (!tripletName.trim()) return;
-    // 名称がある三つ組は、候補の有無にかかわらず行表示と同時に開く。
-    // 候補があれば一覧を、無ければ「履歴候補なし」を欄内に表示する。
-    setOpen(true);
+    // 行表示・三つ組変更時は候補を先読みするが、ドロップダウンは開かない。
+    // 件数は欄内の「候補N件」バッジで示し、クリック/フォーカスで展開する（乱立防止）。
+    setOpen(false);
+    if (!tripletName.trim()) {
+      setSuggestions([]);
+      return;
+    }
     void fetchSuggestions(value);
     // value は依存に含めない（入力中の再取得は onChange→scheduleFetch が担当）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -143,11 +146,16 @@ export function WikiCorrectInput({
     }
     updateMenuPos();
     const onMove = () => updateMenuPos();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     window.addEventListener("scroll", onMove, true);
     window.addEventListener("resize", onMove);
+    window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("scroll", onMove, true);
       window.removeEventListener("resize", onMove);
+      window.removeEventListener("keydown", onKey);
     };
   }, [open, suggestions, updateMenuPos]);
 
@@ -168,54 +176,68 @@ export function WikiCorrectInput({
         }}
       />
       {open && menuPos && suggestions.length > 0 && (
-        <ul
-          className={styles.suggestions}
-          role="listbox"
+        <div
+          className={styles.menu}
           style={{
             position: "fixed",
             top: menuPos.top,
             left: menuPos.left,
             width: menuPos.width,
-            right: "auto",
           }}
         >
-          {suggestions.map((s) => (
-            <li key={s.correctWiki}>
-              <button
-                type="button"
-                className={styles.item}
-                role="option"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  onChange(s.correctWiki);
-                  setOpen(false);
-                }}
-              >
-                <div className={styles.url}>
-                  {titles[s.correctWiki]
-                    ? `${titles[s.correctWiki]}|${s.correctWiki}`
-                    : s.correctWiki}
-                </div>
-                <div className={styles.meta}>
-                  {s.match === "exact" ? "name+wiki 一致" : "name のみ一致"} ·{" "}
-                  {s.count} 件
-                </div>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {open && menuPos && !loading && tripletName && suggestions.length === 0 && (
-        <div
-          className={styles.hint}
-          style={{
-            position: "fixed",
-            top: menuPos.top,
-            left: menuPos.left,
-          }}
-        >
-          履歴候補なし
+          <button
+            type="button"
+            className={styles.menuHeader}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setOpen(false)}
+            title="閉じる（候補件数表示に戻す）"
+          >
+            候補 {suggestions.length} 件 ▴
+          </button>
+          <ul className={styles.suggestions} role="listbox">
+            {suggestions.map((s) => (
+              <li key={s.correctWiki}>
+                <button
+                  type="button"
+                  className={styles.item}
+                  role="option"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    onChange(s.correctWiki);
+                    setOpen(false);
+                  }}
+                >
+                  <div className={styles.url}>
+                    {titles[s.correctWiki]
+                      ? `${titles[s.correctWiki]}|${s.correctWiki}`
+                      : s.correctWiki}
+                  </div>
+                  <div className={styles.meta}>
+                    {s.match === "exact" ? "name+wiki 一致" : "name のみ一致"} ·{" "}
+                    {s.count} 件
+                  </div>
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
+      )}
+      {tripletName.trim() && !loading && !open && (
+        suggestions.length > 0 ? (
+          <button
+            type="button"
+            className={styles.badge}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              setOpen(true);
+              updateMenuPos();
+            }}
+          >
+            候補 {suggestions.length} 件 ▾
+          </button>
+        ) : (
+          <span className={styles.badgeEmpty}>履歴候補なし</span>
+        )
       )}
     </div>
   );

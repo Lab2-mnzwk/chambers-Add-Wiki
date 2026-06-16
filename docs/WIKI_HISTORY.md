@@ -31,9 +31,10 @@ flowchart LR
   Merge --> Cache
 ```
 
-1. **初回候補取得** — `GET /api/wiki-history` が呼ばれたとき、キャッシュに履歴がなければシート先頭 N 行（`indexRows`）から三つ組列を一括読取し、インデックスを構築します。
-2. **候補表示** — 正しいwiki 列の textarea にフォーカスすると、同じ **name**（必要なら **wiki** も）に基づき候補を表示します。
-3. **保存時更新** — 行保存で正しいwiki 列が更新された場合、キャッシュ上の履歴に 1 件マージします（Sheets 全体の再スキャンは不要）。
+1. **初回候補取得 / ウォームアップ** — `GET /api/wiki-history` が呼ばれたとき、キャッシュに履歴がなければシート先頭 N 行（`indexRows`）から三つ組列を一括読取し、インデックスを構築します。アプリ起動・キュー読込時に空クエリで 1 回先行呼び出し（`indexRows` ごと）してインデックスを事前構築し、初回応答を高速化します。
+2. **候補の先読み** — 行表示（三つ組の表示）時に各「正しいwiki」欄が自動で候補を取得（先読み）します。フォーカスを待たず判定を済ませるため、欄を開いた瞬間に候補が出ます。
+3. **候補表示（バッジ→展開）** — 先読み結果は欄内に「候補 N 件」バッジ（候補が無ければ「履歴候補なし」）で示し、**バッジのクリックまたは textarea へのフォーカスでその欄のドロップダウンを展開**します（全欄同時展開による乱立を防止）。ドロップダウンはテーブルの overflow に隠れないよう `position: fixed` で欄直下に描画します。
+4. **保存時更新** — 行保存で正しいwiki 列が更新された場合、キャッシュ上の履歴に 1 件マージします（Sheets 全体の再スキャンは不要）。
 
 ## 候補の優先順位
 
@@ -82,7 +83,7 @@ GET /api/wiki-history?name=...&wiki=...&q=...&indexRows=10000
 | `src/lib/sheets.ts` | `fetchWikiHistoryFromSheet` |
 | `src/lib/store.ts` | キャッシュ読書 |
 | `src/lib/work-service.ts` | `ensureWikiHistory`, 保存時マージ |
-| `src/components/WikiCorrectInput.tsx` | 候補 UI |
+| `src/components/WikiCorrectInput.tsx` | 候補 UI（先読み・件数バッジ・fixed ドロップダウン） |
 | `src/app/api/wiki-history/route.ts` | API |
 
 ## 運用上の注意

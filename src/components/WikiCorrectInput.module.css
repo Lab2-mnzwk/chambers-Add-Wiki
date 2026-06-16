@@ -21,19 +21,38 @@
   resize: vertical;
 }
 
-.suggestions {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: calc(100% + 4px);
+.menu {
   z-index: 10;
-  max-height: 220px;
-  overflow-y: auto;
   background: var(--work-tooltip-bg);
   color: var(--work-tooltip-text);
   border: 1px solid var(--work-tooltip-border);
   border-radius: 6px;
   box-shadow: var(--work-tooltip-shadow);
+  overflow: hidden;
+}
+
+.menuHeader {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--work-tooltip-border);
+  color: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.menuHeader:hover,
+.menuHeader:focus-visible {
+  background: var(--work-col-edit-shadow);
+}
+
+.suggestions {
+  max-height: 220px;
+  overflow-y: auto;
   list-style: none;
   margin: 0;
   padding: 4px 0;
@@ -67,13 +86,29 @@
   opacity: 0.75;
 }
 
-.hint {
+.badge {
+  align-self: flex-start;
+  margin-top: 4px;
   font-size: 11px;
+  font-weight: 600;
   color: var(--work-tooltip-text);
   background: var(--work-tooltip-bg);
   border: 1px solid var(--work-tooltip-border);
-  border-radius: 6px;
-  box-shadow: var(--work-tooltip-shadow);
-  padding: 6px 10px;
-  z-index: 10;
+  border-radius: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.badge:hover,
+.badge:focus-visible {
+  background: var(--work-col-edit-shadow);
+}
+
+.badgeEmpty {
+  align-self: flex-start;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--work-letter);
+  opacity: 0.7;
 }
