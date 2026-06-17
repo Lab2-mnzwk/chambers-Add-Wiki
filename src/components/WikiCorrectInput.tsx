@@ -243,7 +243,7 @@ export function WikiCorrectInput({
             候補 {suggestions.length} 件 ▾
           </button>
         ) : (
-          <span className={styles.badgeEmpty}>履歴候補なし</span>
+          <span className={styles.badgeEmpty}>候補無し</span>
         )
       )}
     </div>
