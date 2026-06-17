@@ -304,11 +304,11 @@ export function WorkApp() {
       ) {
         next = { ...next, worker: bootstrap.discordNames[0] };
       }
-      // インデックス行数をサーバー既定（シート全行をカバー）まで引き上げる。
-      // localStorage に古い小さい値（例: 10000）が残るユーザーもシート全行が対象になる。
+      // インデックス行数は .env.local の DEFAULT_INDEX_ROWS（サーバー既定）を正とする。
+      // UI からは編集させず、localStorage の古い値があっても常にサーバー既定へ合わせる。
       if (
         bootstrap.defaultIndexRows &&
-        prev.indexRows < bootstrap.defaultIndexRows
+        prev.indexRows !== bootstrap.defaultIndexRows
       ) {
         next = { ...next, indexRows: bootstrap.defaultIndexRows };
       }
@@ -764,18 +764,6 @@ export function WorkApp() {
               <option value="dark">Dark</option>
               <option value="system">System</option>
             </select>
-
-            <label className={styles.label}>インデックス行数</label>
-            <input
-              type="number"
-              min={100}
-              max={Math.max(bootstrap?.defaultIndexRows ?? 0, 30000)}
-              step={1000}
-              value={options.indexRows}
-              onChange={(e) =>
-                updateOption("indexRows", Number(e.target.value) || 30000)
-              }
-            />
 
             <div className={styles.btnRow}>
               <button
