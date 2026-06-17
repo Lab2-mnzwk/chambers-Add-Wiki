@@ -228,7 +228,7 @@
   font-size: 13px;
 }
 
-/* 「Entity値有り」のサブ設定として一段下げて見せる */
+/* 「Entity値有りのみ」のサブ設定として一段下げて見せる */
 .checkSub {
   margin-left: 18px;
   padding-left: 8px;

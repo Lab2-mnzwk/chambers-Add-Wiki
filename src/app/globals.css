@@ -42,6 +42,7 @@ html[data-theme="light"] {
   --work-input-bg: #ffffff;
   --work-input-text: #1a1a1a;
   --work-input-border: rgba(26, 86, 219, 0.5);
+  --work-dewey-label: rgba(0, 0, 0, 0.38);
 }
 
 html[data-theme="dark"] {
@@ -82,6 +83,7 @@ html[data-theme="dark"] {
   --work-input-bg: #eaf1fb;
   --work-input-text: #1a1a1a;
   --work-input-border: rgba(26, 86, 219, 0.55);
+  --work-dewey-label: rgba(148, 165, 188, 0.82);
 }
 
 html,

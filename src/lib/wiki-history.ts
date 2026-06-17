@@ -4,6 +4,7 @@ import {
   isHttpUrl,
   resolveHeaderToUnique,
   resolveWorkStatusUnique,
+  tripletDeweyHasValue,
 } from "./columns";
 import { isDoneStatus, WIKI_TRIPLET_RULES } from "./config";
 
@@ -68,8 +69,10 @@ export type WikiHistoryRawRow = {
   name: string;
   wiki: string;
   correctWiki: string;
-  /** その行の作業 Status が完了系か（空欄正解＝Wiki値正しいの判定に使用）。 */
+  /** その行の作業 Status が完了系か（空欄正解＝WikiURL正しいの判定に使用）。 */
   done: boolean;
+  /** deweyID 付与済みなら true。空欄正解は確認不要行のため学習しない。 */
+  deweyHasValue: boolean;
 };
 
 /** 生データから重複を集計した履歴インデックスを作る */
@@ -98,8 +101,8 @@ export function aggregateWikiHistory(
     if (isHistoryCorrectWikiValue(correctWiki)) {
       // URL または「-」を正解として集計。
       upsert(name, wiki, correctWiki);
-    } else if (correctWiki === "" && row.done) {
-      // 完了行で正しいWiki空欄 = 「Wiki値そのまま正解」を学習。
+    } else if (correctWiki === "" && row.done && !row.deweyHasValue) {
+      // 完了行で正しいWiki空欄 = 「WikiURL正しい」。deweyID 付与済みは確認対象外のため除外。
       upsert(name, wiki, BLANK_CORRECT_VALUE);
     }
   }
@@ -221,8 +224,14 @@ export function mergeWikiHistoryFromSave(
     if (editedUniqueNames.has(okUnique)) {
       result = mergeWikiHistoryEntry(result, name, wiki, correctWiki);
     }
-    // 正しいWiki空欄のまま完了にした三つ組を学習（保存即時反映）。
-    if (statusDoneNow && name && wiki && correctWiki === "") {
+    // 正しいWiki空欄のまま完了にした三つ組を学習（deweyID 付与済みは除外）。
+    if (
+      statusDoneNow &&
+      name &&
+      wiki &&
+      correctWiki === "" &&
+      !tripletDeweyHasValue(nameHeader, rowByUnique, headerMap)
+    ) {
       result = mergeBlankCorrectEntry(result, name, wiki);
     }
   }

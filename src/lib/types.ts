@@ -46,6 +46,8 @@ export type ColumnPayload = {
   tripletName: string;
   /** 正しいwiki 列用: 対応する wiki 列の値 */
   tripletWiki: string;
+  /** 正しいwiki 列用: 対応する deweyID 列に値があるか（確認不要） */
+  tripletDeweyHasValue: boolean;
 };
 
 export type RowPayload = {

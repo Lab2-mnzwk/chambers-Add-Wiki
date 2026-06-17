@@ -16,14 +16,17 @@ import {
 } from "./config";
 import {
   columnLetter,
+  deweyCellHasValue,
   effectiveColCount,
   makeUniqueHeaders,
+  resolveHeaderToUnique,
   resolveWorkAssigneeUnique,
   resolveWorkStatusUnique,
 } from "./columns";
+import { WIKI_DEWEY_BY_NAME, WIKI_TRIPLET_RULES } from "./config";
 import { requireGoogleAccessToken } from "./google-session";
 import type { SheetStructure } from "./types";
-import { listWikiTripletColumns, type WikiHistoryRawRow } from "./wiki-history";
+import type { WikiHistoryRawRow } from "./wiki-history";
 
 let serviceAccountSheets: sheets_v4.Sheets | null = null;
 
@@ -193,31 +196,57 @@ export async function fetchQueueIndex(
   return records;
 }
 
-/** 正しいwiki が記入された三つ組だけ、インデックス行数ぶん一括読取 */
+/** 正しいwiki / 空欄正解学習用に三つ組列＋deweyID 列を、インデックス行数ぶん一括読取 */
 export async function fetchWikiHistoryFromSheet(
   structure: SheetStructure,
   indexRows: number
 ): Promise<WikiHistoryRawRow[]> {
-  const tripletCols = listWikiTripletColumns(structure);
-  if (!tripletCols.length) return [];
-
-  const sheets = await getSheets();
+  const headerMap = resolveHeaderToUnique(
+    structure.rawHeaders,
+    structure.uniqueHeaders
+  );
   const startRow = 2;
   const endRow = indexRows + 1;
   const ranges: string[] = [];
+  type TripletRange = {
+    nameIdx: number;
+    wikiIdx: number;
+    okIdx: number;
+    deweyIdx: number | null;
+  };
+  const tripletRanges: TripletRange[] = [];
 
-  for (const triplet of tripletCols) {
-    for (const unique of [triplet.nameUnique, triplet.wikiUnique, triplet.okUnique]) {
+  for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
+    const nameUnique = headerMap[nameHeader];
+    const wikiUnique = headerMap[wikiHeader];
+    const okUnique = headerMap[okHeader];
+    if (!nameUnique || !wikiUnique || !okUnique) continue;
+
+    const pushRange = (unique: string): number => {
       const idx = structure.uniqueHeaders.indexOf(unique);
-      if (idx < 0) continue;
+      if (idx < 0) return -1;
       const letter = columnLetter(idx + 1);
       ranges.push(`'${SHEET_NAME}'!${letter}${startRow}:${letter}${endRow}`);
-    }
+      return ranges.length - 1;
+    };
+
+    const nameIdx = pushRange(nameUnique);
+    const wikiIdx = pushRange(wikiUnique);
+    const okIdx = pushRange(okUnique);
+    if (nameIdx < 0 || wikiIdx < 0 || okIdx < 0) continue;
+
+    const deweyHeader = WIKI_DEWEY_BY_NAME[nameHeader];
+    const deweyUnique = deweyHeader ? headerMap[deweyHeader] : undefined;
+    const deweyIdx = deweyUnique ? pushRange(deweyUnique) : null;
+
+    tripletRanges.push({ nameIdx, wikiIdx, okIdx, deweyIdx });
   }
 
   if (!ranges.length) return [];
 
-  // 「完了行で正しいWiki空欄 = Wiki値正しい」の判定用に作業 Status 列も読む。
+  const sheets = await getSheets();
+
+  // 「完了行で正しいWiki空欄 = WikiURL正しい」の判定用に作業 Status 列も読む。
   const statusUnique =
     resolveWorkStatusUnique(structure.rawHeaders, structure.uniqueHeaders) ??
     null;
@@ -236,27 +265,27 @@ export async function fetchWikiHistoryFromSheet(
     ranges,
   });
 
+  const colAt = (idx: number): string[] =>
+    (batch.data.valueRanges?.[idx]?.values ?? []).map((row) =>
+      String(row[0] ?? "").trim()
+    );
+
   const statusCol =
-    statusRangeIndex >= 0
-      ? (batch.data.valueRanges?.[statusRangeIndex]?.values ?? []).map((row) =>
-          String(row[0] ?? "").trim()
-        )
-      : [];
+    statusRangeIndex >= 0 ? colAt(statusRangeIndex) : [];
 
   const results: WikiHistoryRawRow[] = [];
 
-  for (let t = 0; t < tripletCols.length; t++) {
-    const base = t * 3;
-    const nameCol = (batch.data.valueRanges?.[base]?.values ?? []).map((row) =>
-      String(row[0] ?? "").trim()
+  for (const { nameIdx, wikiIdx, okIdx, deweyIdx } of tripletRanges) {
+    const nameCol = colAt(nameIdx);
+    const wikiCol = colAt(wikiIdx);
+    const okCol = colAt(okIdx);
+    const deweyCol = deweyIdx != null ? colAt(deweyIdx) : [];
+    const rowCount = Math.max(
+      nameCol.length,
+      wikiCol.length,
+      okCol.length,
+      deweyCol.length
     );
-    const wikiCol = (batch.data.valueRanges?.[base + 1]?.values ?? []).map((row) =>
-      String(row[0] ?? "").trim()
-    );
-    const okCol = (batch.data.valueRanges?.[base + 2]?.values ?? []).map((row) =>
-      String(row[0] ?? "").trim()
-    );
-    const rowCount = Math.max(nameCol.length, wikiCol.length, okCol.length);
 
     for (let i = 0; i < rowCount; i++) {
       const name = nameCol[i] ?? "";
@@ -264,9 +293,10 @@ export async function fetchWikiHistoryFromSheet(
       const correctWiki = okCol[i] ?? "";
       if (!name || !wiki) continue;
       const done = isDoneStatus(statusCol[i] ?? "");
+      const deweyHasValue = deweyCellHasValue(deweyCol[i] ?? "");
       // 正しいWiki が値ありの行、または完了行（空欄正解判定用）だけ残す。
       if (correctWiki === "" && !done) continue;
-      results.push({ name, wiki, correctWiki, done });
+      results.push({ name, wiki, correctWiki, done, deweyHasValue });
     }
   }
 

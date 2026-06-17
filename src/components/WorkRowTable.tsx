@@ -21,6 +21,11 @@ function renderColumnBody(
   indexRows: number,
   onEdit: (uniqueName: string, value: string) => void
 ) {
+  if (col.isWikiEdit && col.tripletDeweyHasValue) {
+    return (
+      <div className={styles.deweyLabel}>DeweyID有りのため入力不要</div>
+    );
+  }
   if (col.inline) {
     if (col.isStatus) {
       return (

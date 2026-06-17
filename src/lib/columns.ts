@@ -212,6 +212,21 @@ export function tripletValuesForOkHeader(
   return null;
 }
 
+/** 正しいwiki 列に対応する三つ組の deweyID 有無 */
+export function tripletDeweyHasValueForOkHeader(
+  okRawHeader: string,
+  rowByUnique: Record<string, string>,
+  rawHeaders: string[],
+  uniqueHeaders: string[]
+): boolean {
+  const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
+  for (const [nameHeader, , okHeader] of WIKI_TRIPLET_RULES) {
+    if (okHeader !== okRawHeader) continue;
+    return tripletDeweyHasValue(nameHeader, rowByUnique, headerMap);
+  }
+  return false;
+}
+
 export function sectionForWorkRawHeader(rawHeader: string): string | null {
   if (rawHeader.startsWith("Pl_")) return "Place";
   if (rawHeader.startsWith("P-T_")) return "Patient-Theme";
@@ -335,6 +350,11 @@ export function wikiTripletDisplayState(
   return "active";
 }
 
+export function deweyCellHasValue(value: unknown): boolean {
+  const v = String(value ?? "").trim();
+  return v !== "" && v !== "-";
+}
+
 /**
  * 三つ組の deweyID 列に値があるか（空・`-` は「値無し」扱い）。
  * 「deweyID有りを除く」モードの判定にのみ使用（deweyID 列自体は表示しない）。
@@ -349,7 +369,7 @@ export function tripletDeweyHasValue(
   const unique = headerMap[deweyHeader];
   if (!unique || !(unique in rowByUnique)) return false;
   const v = String(rowByUnique[unique] ?? "").trim();
-  return v !== "" && v !== "-";
+  return deweyCellHasValue(v);
 }
 
 /**
@@ -590,8 +610,7 @@ export function buildColumnPayload(
     const colIndex = uniqueHeaders.indexOf(uniqueName) + 1;
     const rawHeader = headerByUnique[uniqueName] ?? uniqueName;
     const value = rowByUnique[uniqueName];
-    const display = isCellEmpty(value) ? "—" : String(value).trim();
-    const inline = isInlineEditableColumn(
+    let inline = isInlineEditableColumn(
       uniqueName,
       rawHeader,
       colIndex,
@@ -603,12 +622,29 @@ export function buildColumnPayload(
     const triplet = isCorrectWikiHeader(rawHeader)
       ? tripletValuesForOkHeader(rawHeader, rowByUnique, rawHeaders, uniqueHeaders)
       : null;
+    const tripletDewey =
+      isCorrectWikiHeader(rawHeader) &&
+      tripletDeweyHasValueForOkHeader(
+        rawHeader,
+        rowByUnique,
+        rawHeaders,
+        uniqueHeaders
+      );
+    if (isCorrectWikiHeader(rawHeader) && tripletDewey) {
+      inline = false;
+    }
+    const displayText =
+      isCorrectWikiHeader(rawHeader) && tripletDewey
+        ? "DeweyID有りのため入力不要"
+        : isCellEmpty(value)
+          ? "—"
+          : String(value).trim();
 
     return {
       uniqueName,
       rawHeader,
       letter: columnLetter(colIndex),
-      display,
+      display: displayText,
       value: editValue,
       inline,
       isStatus,
@@ -619,6 +655,7 @@ export function buildColumnPayload(
       isLeading: (LEADING as readonly string[]).includes(rawHeader),
       tripletName: triplet?.name ?? "",
       tripletWiki: triplet?.wiki ?? "",
+      tripletDeweyHasValue: tripletDewey,
     };
   });
 }

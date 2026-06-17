@@ -50,23 +50,23 @@
 
 設定パネルのレイアウト: **PC は作業者名を含め全項目を常時表示**。**スマホは作業者名のみ常時表示**で、それ以外（表示モード・テーマ・インデックス行数・キュー操作）は「表示設定等」トグルで折り畳む。
 
-設定の保持: ブラウザの **localStorage**（キー `wikiWorkNext`）に保存（端末/ブラウザ単位。サーバー側の個人別保存はなし）。初回（localStorage 無し）の既定（`defaultOptions`）は **作業者名=「全件表示」/ 完了行スキップ ON / Entity値有り ON / deweyID有りを除く OFF / 列表示・編集 OFF / indexRows 30000**。なお `indexRows` は **シート全行をカバーするための取得上限**で、サーバー既定 `DEFAULT_INDEX_ROWS`（既定 30000、環境変数で上書き可）に揃える。bootstrap 時に localStorage の古い小さい値（例: 10000）はサーバー既定まで自動的に引き上げられる（超過行が取り込まれない不具合の防止）。
+設定の保持: ブラウザの **localStorage**（キー `wikiWorkNext`）に保存（端末/ブラウザ単位。サーバー側の個人別保存はなし）。初回（localStorage 無し）の既定（`defaultOptions`）は **作業者名=「全件表示」/ 完了行スキップ ON / Entity値有りのみ ON / DeweyID付与除く ON / 列表示・編集 OFF / indexRows 30000**。なお `indexRows` は **シート全行をカバーするための取得上限**で、サーバー既定 `DEFAULT_INDEX_ROWS`（既定 30000、環境変数で上書き可）に揃える。bootstrap 時に localStorage の古い小さい値（例: 10000）はサーバー既定まで自動的に引き上げられる（超過行が取り込まれない不具合の防止）。
 
-チェックボックスは上から「完了行をスキップ」「Entity値有り」（サブ:「deweyID有りを除く」）「列表示・編集（AN〜GU）」の順。
+チェックボックスは上から「完了行をスキップ」「Entity値有りのみ」（サブ:「DeweyID付与除く」）「列表示・編集（AN〜GU）」の順。
 
 | UI 項目 | 既定 | 意味 |
 |------------|------|------|
-| Entity値有り | ON | 名称に値がある Wiki 三つ組を3列セット表示。OFF で全列表示（フィルタなし）。`fullEditMode` ON 時は無効 |
-| └ deweyID有りを除く（サブ） | ON | 「Entity値有り」の下位設定。ON で **deweyID に値がある三つ組（=ID で同定済み＝判断不要）を除外**し、名称有 かつ deweyID 無（空/`-`）の組のみ表示。Entity値有り OFF / `fullEditMode` ON のとき無効 |
+| Entity値有りのみ | ON | 名称に値がある Wiki 三つ組を3列セット表示。OFF で全列表示（フィルタなし）。`fullEditMode` ON 時は無効 |
+| └ DeweyID付与除く（サブ） | ON | 「Entity値有りのみ」の下位設定。ON で **DeweyID 有りの三つ組（=確認不要）を除外**し、名称有 かつ DeweyID 無（空/`-`）の組のみ表示。Entity値有りのみ OFF / `fullEditMode` ON のとき無効 |
 | 列表示・編集（AN〜GU）（`fullEditMode`） | OFF | ON のとき下記の全列編集モード。他の表示項目は無効化 |
 
 UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 
-| Entity値有り | deweyID有りを除く | `showNamedTriplets` | `lightBlueOnly` | 表示 |
+| Entity値有りのみ | DeweyID付与除く | `showNamedTriplets` | `lightBlueOnly` | 表示 |
 |---|---|---|---|---|
 | OFF | （無効） | false | false | 全列表示（AC 以降の全列をフィルタなしで表示。空列・三つ組も全部、memo/status 補完なし） |
 | ON | OFF | true | false | 名称有の三つ組セット（Wiki=`-`・deweyID 有無を問わず全部） |
-| ON | ON（既定） | false | true | 名称有 **かつ deweyID 無（空/`-`）** の三つ組セットのみ（ID 有＝判断不要を除外） |
+| ON | ON（既定） | false | true | 名称有 **かつ DeweyID 無（空/`-`）** の三つ組セットのみ（DeweyID 有り＝確認不要を除外） |
 
 ### 名称三つ組 表示モード（`showNamedTriplets`）
 
@@ -120,7 +120,7 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 
 ## 編集・保存
 
-- 編集: Status / memo / 正しいwiki のみ。`fullEditMode` ON 時は上記「列表示・編集モード」参照
+- 編集: Status / memo / 正しいwiki のみ（**DeweyID 有りの正しいwiki 列は入力欄なし・「DeweyID有りのため入力不要」表示（小さめ文字）、Wiki 列と同色**）。`fullEditMode` ON 時は上記「列表示・編集モード」参照
 - **自動保存（移動操作に連動）**: `前の行` / `開く` / `次の行` のいずれを押しても、**未保存の変更があれば移動前に自動保存**する。明示的な保存ボタンは無し（操作感はスプレッドシート的）。
   - **dirty 判定**: 読込時の値スナップショット（`originalEdits`）と現在の `edits` を比較。**差分が無ければ書き込まない**（API も呼ばない）ため、書き込み回数は「移動回数」ではなく「実際に編集した行数」に比例＝負荷を抑制。
   - **保存失敗時は移動を中止**しエラー表示・編集は保持（古いトークン等での取りこぼし防止）。
@@ -142,12 +142,12 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 
 正しいwiki セルの入力時に、過去の確定値を候補表示する補完機能。
 
-- **候補の生成元**: 作業シートを走査し、`名称 + Wiki` がある三つ組について正しいwiki の値を集計（`aggregateWikiHistory`）。候補対象は **URL** / **`-`（該当なし）** / **空欄（=Wiki値正しい、ただし作業 Status 完了行のみ）** の3種。同一 `名称/Wiki/正しいwiki` は件数を加算。インデックス行数は `indexRows`。詳細は `docs/WIKI_HISTORY.md`。
+- **候補の生成元**: 作業シートを走査し、`名称 + Wiki` がある三つ組について正しいwiki の値を集計（`aggregateWikiHistory`）。候補対象は **URL** / **`-`（該当なし）** / **空欄（=WikiURL正しい、ただし作業 Status 完了行かつ deweyID 未付与のみ）** の3種。同一 `名称/Wiki/正しいwiki` は件数を加算。インデックス行数は `indexRows`。詳細は `docs/WIKI_HISTORY.md`。
 - **候補の絞り込み**（`suggestWikiHistory`）: 編集中セルの行の `名称`（必要に応じ `Wiki`）をキーに照合。
   - `exact`（name+wiki 一致）を優先、続いて `name のみ一致`。各々 件数降順、最大 8 件。
   - 入力中テキストでさらに部分一致フィルタ（250ms デバウンス）。
-- **表示**: 各候補は `タイトル|URL`（タイトルは `/api/link-preview` で取得）または `「-」（Wiki該当なし）` / `Wiki値正しい`（空欄正解）と、一致種別・件数を表示。クリックでセルへ反映（空欄正解はセルを空に）。
-- **学習（保存時マージ）**: 保存で正しいwiki 列が更新されると、その `名称/Wiki/正しいwiki`（URL/`-`）をメモリ上の履歴インデックスへ追記（`mergeWikiHistoryFromSave`）。さらに **Status を完了に変更した保存**では、空欄のままの三つ組を「Wiki値正しい」として学習（`mergeBlankCorrectEntry`）。次回以降の候補に反映される。
+- **表示**: 各候補は `タイトル|URL`（タイトルは `/api/link-preview` で取得）または `Wiki該当なし（`-` を入力）` / `WikiURL正しい`（空欄正解）と、一致種別・件数を表示。クリックでセルへ反映（空欄正解はセルを空に）。
+- **学習（保存時マージ）**: 保存で正しいwiki 列が更新されると、その `名称/Wiki/正しいwiki`（URL/`-`）をメモリ上の履歴インデックスへ追記（`mergeWikiHistoryFromSave`）。さらに **Status を完了に変更した保存**では、deweyID 未付与かつ空欄のままの三つ組を「WikiURL正しい」として学習（`mergeBlankCorrectEntry`）。次回以降の候補に反映される。
 
 ## 作業者名リスト（`loadAssignDiscordNames`）
 

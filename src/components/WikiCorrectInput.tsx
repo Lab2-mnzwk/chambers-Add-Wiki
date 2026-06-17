@@ -212,9 +212,9 @@ export function WikiCorrectInput({
                 >
                   <div className={styles.url}>
                     {s.correctWiki === ""
-                      ? "Wiki値正しい"
+                      ? "WikiURL正しい"
                       : s.correctWiki === "-"
-                      ? "「-」（Wiki該当なし）"
+                      ? "Wiki該当なし（`-` を入力）"
                       : titles[s.correctWiki]
                       ? `${titles[s.correctWiki]}|${s.correctWiki}`
                       : s.correctWiki}

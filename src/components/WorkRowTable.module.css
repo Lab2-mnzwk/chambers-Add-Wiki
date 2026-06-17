@@ -82,6 +82,16 @@
   min-height: 72px;
 }
 
+.deweyLabel {
+  flex: 1 1 auto;
+  min-height: 72px;
+  color: var(--work-dewey-label);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
 .letter {
   font-size: 13px;
   font-weight: 700;

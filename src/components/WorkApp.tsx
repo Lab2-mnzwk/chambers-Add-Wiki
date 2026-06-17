@@ -17,12 +17,12 @@ const PREFS_KEY = "wikiWorkNext";
 
 const defaultOptions: WorkOptions = {
   // 初回（localStorage 無し）の既定。作業者名は「全件表示」、
-  // 表示は Entity値有り ON / deweyID有りを除く OFF。
+  // 表示は Entity値有りのみ ON / DeweyID付与除く ON（=確認必要な白セルのみ）。
   worker: ASSIGN_ALL_ROWS_NAME,
   queueFilter: "自分担当",
   skipDone: true,
-  lightBlueOnly: false,
-  showNamedTriplets: true,
+  lightBlueOnly: true,
+  showNamedTriplets: false,
   fullEditMode: false,
   indexRows: 30000,
 };
@@ -66,7 +66,7 @@ function editsDiffer(
 }
 
 export function WorkApp() {
-  const { data: session, status: sessionStatus } = useSession();
+  const { data: session } = useSession();
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
   // 初期値は決定論的な defaultOptions（SSR と一致させハイドレーション不一致を防ぐ）。
   // localStorage の保存値はマウント後の loadPrefs で反映する。
@@ -273,16 +273,22 @@ export function WorkApp() {
   }, [themeMode]);
 
   useEffect(() => {
-    if (sessionStatus === "loading") return;
     loadPrefs();
+    let cancelled = false;
     fetch("/api/bootstrap")
       .then((r) => r.json())
       .then((data) => {
+        if (cancelled) return;
         if (data.error) throw new Error(data.error);
         setBootstrap(data as BootstrapPayload);
       })
-      .catch((e) => setMessage(String(e), "error"));
-  }, [loadPrefs, sessionStatus, session?.user?.email]);
+      .catch((e) => {
+        if (!cancelled) setMessage(String(e), "error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadPrefs, session?.user?.email]);
 
   useEffect(() => {
     if (!bootstrap || bootstrap.authRequired) return;
@@ -338,6 +344,8 @@ export function WorkApp() {
     const workerChanged = prevApplied != null && prevApplied.worker !== options.worker;
     const keepPosition = prevApplied != null && !workerChanged;
     void (async () => {
+      setLoading(true);
+      try {
       // キュー再読込（skipDone/indexRows・作業者変更）の前に未保存編集を自動保存する。
       // 移動操作と同じ挙動に統一し、再読込で編集（例: Status 変更）が消えるのを防ぐ。
       const saved = await saveCurrentIfDirty();
@@ -367,6 +375,9 @@ export function WorkApp() {
         indexRows: options.indexRows,
       };
       await loadQueue(options, keepPosition);
+      } finally {
+        setLoading(false);
+      }
     })().catch((e) => setMessage(String(e), "error"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bootstrap, options.worker, options.skipDone, options.indexRows]);
@@ -397,8 +408,8 @@ export function WorkApp() {
   };
 
   // 表示モードの UI 派生状態（内部フラグ showNamedTriplets / lightBlueOnly へ対応）。
-  // Entity値有り: 名称三つ組をセット表示（OFF=全列表示）。
-  // deweyID有りを除く: Entity値有りのサブ。deweyID に値がある組（=判断不要）を除外。
+  // Entity値有りのみ: 名称三つ組をセット表示（OFF=全列表示）。
+  // DeweyID付与除く: 上記のサブ。DeweyID 有りの三つ組を除外。
   const entityValueOn = options.showNamedTriplets || options.lightBlueOnly;
   const excludeDeweyOn = !options.showNamedTriplets && options.lightBlueOnly;
 
@@ -460,12 +471,35 @@ export function WorkApp() {
     }
   };
 
+  /**
+   * 移動前のキュー取得。skipDone OFF 時はサーバーから再取得し、
+   * 以前 skipDone ON 時にクライアント側で除外された完了行を復元する。
+   */
+  const resolveNavigationQueue = async (): Promise<{
+    ok: boolean;
+    queueRows: number[];
+  }> => {
+    const saved = await saveCurrentIfDirty();
+    if (!saved.ok) return saved;
+    if (options.skipDone) return saved;
+
+    const res = await fetch(`/api/queue?${optionsQuery(options)}`);
+    const data = await res.json();
+    if (!res.ok) {
+      setMessage(String(data.error ?? "キューの読み込みに失敗"), "error");
+      return { ok: false, queueRows: saved.queueRows };
+    }
+    const rows = (data.sheetRows ?? []) as number[];
+    setQueueRows(rows);
+    return { ok: true, queueRows: rows };
+  };
+
   const goPrev = async () => {
     if (historyIndex <= 0 || loading) return;
     setLoading(true);
     const original = currentRow;
     try {
-      const saved = await saveCurrentIfDirty();
+      const saved = await resolveNavigationQueue();
       if (!saved.ok) return;
       let q = saved.queueRows;
       let nextIndex = historyIndex - 1;
@@ -480,7 +514,6 @@ export function WorkApp() {
         // スナップショットが古くてもライブ status が完了なら戻り時もスキップ。
         if (options.skipDone && isDoneStatus(rowStatusOf(payload))) {
           q = q.filter((r) => r !== row);
-          setQueueRows(q);
           nextIndex -= 1;
           continue;
         }
@@ -511,7 +544,7 @@ export function WorkApp() {
     if (loading) return;
     setLoading(true);
     try {
-      const saved = await saveCurrentIfDirty();
+      const saved = await resolveNavigationQueue();
       if (!saved.ok) return;
       const q = saved.queueRows;
 
@@ -558,7 +591,7 @@ export function WorkApp() {
     setLoading(true);
     const original = currentRow;
     try {
-      const saved = await saveCurrentIfDirty();
+      const saved = await resolveNavigationQueue();
       if (!saved.ok) return;
       // キュー・スナップショットは古い可能性がある（外部/別セッションでの完了など）。
       // 移動先のライブ status が完了なら、その行をスナップショットから外して次へ進む。
@@ -577,9 +610,7 @@ export function WorkApp() {
         }
         const payload = await loadRow(next, options);
         if (options.skipDone && isDoneStatus(rowStatusOf(payload))) {
-          // getRow がサーバ index を自己修復済み。ローカルでも除外して次を探す。
           q = q.filter((r) => r !== next);
-          setQueueRows(q);
           cursor = next;
           continue;
         }
@@ -714,7 +745,7 @@ export function WorkApp() {
                 disabled={options.fullEditMode}
                 onChange={(e) => setEntityValue(e.target.checked)}
               />
-              Entity値有り
+              Entity値有りのみ
             </label>
             <label className={`${styles.check} ${styles.checkSub}`}>
               <input
@@ -723,7 +754,7 @@ export function WorkApp() {
                 disabled={options.fullEditMode || !entityValueOn}
                 onChange={(e) => setExcludeDewey(e.target.checked)}
               />
-              deweyID有りを除く
+              DeweyID付与除く
             </label>
             <label className={styles.check}>
               <input
@@ -782,6 +813,14 @@ export function WorkApp() {
         </aside>
 
         <main className={styles.main}>
+          {!bootstrap && (
+            <div className={styles.empty}>読み込み中…</div>
+          )}
+
+          {bootstrap && loading && !rowPayload && (
+            <div className={styles.empty}>行を読み込み中…</div>
+          )}
+
           {!queueRows.length && bootstrap && options.worker && (
             <div className={styles.empty}>
               担当の行が見つかりません。作業者名を確認してください。

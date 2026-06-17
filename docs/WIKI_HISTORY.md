@@ -54,10 +54,10 @@ flowchart LR
 | 正解の種類 | 値 | 学習条件 | UI 表示 | 選択時に入る値 |
 |---|---|---|---|---|
 | URL | `https://...` | その行に記入があれば学習 | URL（タイトル付き） | その URL |
-| 該当なし | `-` | その行に記入があれば学習 | 「「-」（Wiki該当なし）」 | `-` |
-| Wiki値正しい | 空欄 | **作業 Status が完了系の行のみ**（未完了の空欄は未作業として無視） | 「Wiki値正しい」 | 空欄（欄をクリア） |
+| 該当なし | `-` | その行に記入があれば学習 | Wiki該当なし（`-` を入力） | `-` |
+| WikiURL正しい | 空欄 | **作業 Status が完了系かつ deweyID 未付与**（deweyID 付与済みの空欄は確認対象外のため除外） | WikiURL正しい | 空欄（欄をクリア） |
 
-- 空欄正解は、`fetchWikiHistoryFromSheet` が作業 Status 列も読み（batchGet に1範囲追加）、完了行の空欄三つ組を学習します。保存時は **Status を完了に変更した保存でのみ**、空欄のままの三つ組を `mergeBlankCorrectEntry` で即時学習します。
+- 空欄正解は、`fetchWikiHistoryFromSheet` が作業 Status 列と deweyID 列も読み、**完了行かつ deweyID 未付与**の空欄三つ組のみ学習します。保存時は **Status を完了に変更した保存**で、deweyID 未付与かつ空欄の三つ組を `mergeBlankCorrectEntry` で即時学習します。
 - `-` 候補・空欄正解候補はリンクプレビューを取得しません。
 
 ## API
