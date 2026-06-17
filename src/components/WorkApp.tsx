@@ -86,15 +86,12 @@ export function WorkApp() {
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [moreSettingsOpen, setMoreSettingsOpen] = useState(false);
   // 直近で「キューに適用済み」の識別子（worker/skipDone/indexRows）。
-  // 適用が成功したときだけ更新する。保存失敗で再読込を中止した場合に、
-  // トグルを直前の適用値へ巻き戻すための基準にも使う。
+  // 適用が成功したときだけ更新する。作業者変更の判定（位置維持の可否）に使う。
   const appliedQueueKeyRef = useRef<{
     worker: string;
     skipDone: boolean;
     indexRows: number;
   } | null>(null);
-  // プログラムによるトグル巻き戻しで再発火した effect 実行を 1 回だけスキップするフラグ。
-  const revertingQueueOptionRef = useRef(false);
   // queueRows を書き換える非同期処理の世代カウンタ。
   // 後発の書込が常に最新。古い in-flight 応答（例: skipDone=ON で算出された
   // キュー）が後から届いて上書きするのを防ぐ。
@@ -109,6 +106,12 @@ export function WorkApp() {
   const dirty = useMemo(
     () => editsDiffer(edits, originalEdits),
     [edits, originalEdits]
+  );
+
+  // 「前の行」可否: 現在行より小さい行番号がキューにあれば前へ進める。
+  const hasPrevRow = useMemo(
+    () => currentRow != null && queueRows.some((r) => r < currentRow),
+    [currentRow, queueRows]
   );
 
   // 背景化・離脱時の自動保存に使う最新値（イベントリスナのクロージャ陳腐化を避ける）。
@@ -332,12 +335,6 @@ export function WorkApp() {
     if (!bootstrap || bootstrap.authRequired) return;
     if (!options.worker) return;
 
-    // トグル巻き戻しによる再発火はキュー再読込・保存をせず 1 回だけ飲み込む。
-    if (revertingQueueOptionRef.current) {
-      revertingQueueOptionRef.current = false;
-      return;
-    }
-
     savePrefs(options);
 
     const prevApplied = appliedQueueKeyRef.current;
@@ -350,23 +347,10 @@ export function WorkApp() {
       // 移動操作と同じ挙動に統一し、再読込で編集（例: Status 変更）が消えるのを防ぐ。
       const saved = await saveCurrentIfDirty();
       if (!saved.ok) {
-        // 保存失敗時はトグル状態とキューが食い違わないよう、直前の適用値へ巻き戻す。
-        if (
-          prevApplied &&
-          (prevApplied.worker !== options.worker ||
-            prevApplied.skipDone !== options.skipDone ||
-            prevApplied.indexRows !== options.indexRows)
-        ) {
-          revertingQueueOptionRef.current = true;
-          const reverted = {
-            ...options,
-            worker: prevApplied.worker,
-            skipDone: prevApplied.skipDone,
-            indexRows: prevApplied.indexRows,
-          };
-          setOptions(reverted);
-          savePrefs(reverted);
-        }
+        // 保存失敗時はトグル選択（skipDone 等）を勝手に巻き戻さない。
+        // ここでキュー再読込すると未保存編集が失われるため中断するだけにし、
+        // エラーは saveCurrentIfDirty が表示済み。次の移動操作で
+        // resolveNavigationQueue が skipDone=false なら最新キューを取り直して自己修復する。
         return;
       }
       appliedQueueKeyRef.current = {
@@ -495,36 +479,42 @@ export function WorkApp() {
   };
 
   const goPrev = async () => {
-    if (historyIndex <= 0 || loading) return;
+    if (loading) return;
     setLoading(true);
     const original = currentRow;
     try {
       const saved = await resolveNavigationQueue();
       if (!saved.ok) return;
+      // goNext と対称に「キュー基準」で前の行（現在行より小さい最大の行番号）を探す。
+      // 履歴ではなくキューを辿るので、skipDone ON 時に積まれなかった完了行も
+      // skipDone OFF にすれば前方向でも到達できる（履歴の欠落でスキップされない）。
       let q = saved.queueRows;
-      let nextIndex = historyIndex - 1;
-      while (nextIndex >= 0) {
-        const row = history[nextIndex];
-        // 最新キューに存在しない行＝完了/対象外としてスキップ。
-        if (options.skipDone && !q.includes(row)) {
-          nextIndex -= 1;
-          continue;
+      let cursor = original;
+      while (true) {
+        const from = cursor;
+        const prev =
+          from != null ? q.filter((r) => r < from).pop() ?? null : null;
+        if (prev == null) {
+          showToast("前の行がありません");
+          if (original != null && cursor !== original) {
+            await loadRow(original, options);
+          }
+          return;
         }
-        const payload = await loadRow(row, options);
-        // スナップショットが古くてもライブ status が完了なら戻り時もスキップ。
+        const payload = await loadRow(prev, options);
+        // skipDone ON のときだけライブ status が完了の行を飛ばす。
         if (options.skipDone && isDoneStatus(rowStatusOf(payload))) {
-          q = q.filter((r) => r !== row);
-          nextIndex -= 1;
+          q = q.filter((r) => r !== prev);
+          cursor = prev;
           continue;
         }
-        setHistoryIndex(nextIndex);
-        const idx = q.indexOf(row);
+        const nextHistory = history.slice(0, historyIndex + 1);
+        nextHistory.push(prev);
+        setHistory(nextHistory);
+        setHistoryIndex(nextHistory.length - 1);
+        const idx = q.indexOf(prev);
         if (idx >= 0) setQueueIndex(idx);
         break;
-      }
-      if (nextIndex < 0) {
-        showToast("前の未完了行がありません");
-        if (original != null) await loadRow(original, options);
       }
     } catch (e) {
       setMessage(String(e), "error");
@@ -850,7 +840,7 @@ export function WorkApp() {
                 <button
                   type="button"
                   className={styles.navPrev}
-                  disabled={historyIndex <= 0}
+                  disabled={!hasPrevRow || loading}
                   onClick={goPrev}
                 >
                   ← 前の行
