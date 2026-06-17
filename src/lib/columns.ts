@@ -90,6 +90,12 @@ export function isWikiDash(value: unknown): boolean {
   return String(value).trim() === "-";
 }
 
+/** 名称セルが「Entity値あり」か。空 と "-" は値なし扱い（Entity値有りに含めない）。 */
+export function nameCellHasValue(value: unknown): boolean {
+  const v = String(value ?? "").trim();
+  return v !== "" && v !== "-";
+}
+
 /** 前後空白を除いた文字列が http(s) URL か */
 export function isHttpUrl(text: string): boolean {
   const trimmed = text.trim();
@@ -339,7 +345,7 @@ export function wikiTripletDisplayState(
   const nameUnique = headerMap[nameHeader];
   const wikiUnique = headerMap[wikiHeader];
   if (!nameUnique || !(nameUnique in rowByUnique)) return "empty_name";
-  if (isCellEmpty(rowByUnique[nameUnique])) return "empty_name";
+  if (!nameCellHasValue(rowByUnique[nameUnique])) return "empty_name";
   if (
     wikiUnique &&
     wikiUnique in rowByUnique &&
@@ -428,7 +434,7 @@ function expandWikiTripletColumns(
   for (const [nameHeader, , okHeader] of WIKI_TRIPLET_RULES) {
     const nameUnique = headerMap[nameHeader];
     if (!nameUnique || !(nameUnique in rowByUnique)) continue;
-    if (isCellEmpty(rowByUnique[nameUnique])) continue;
+    if (!nameCellHasValue(rowByUnique[nameUnique])) continue;
     // 可視セット: Entity値有り=名称有 / deweyID有りを除く=名称有 かつ deweyID 無。
     const visible =
       showNamedTriplets ||
@@ -452,7 +458,7 @@ function expandWikiTripletColumns(
       const wikiUnique = headerMap[wikiHeader];
       const okUnique = headerMap[okHeader];
       if (!nameUnique || !(nameUnique in rowByUnique)) continue;
-      if (isCellEmpty(rowByUnique[nameUnique])) continue;
+      if (!nameCellHasValue(rowByUnique[nameUnique])) continue;
       if (!tripletDeweyHasValue(nameHeader, rowByUnique, headerMap)) continue;
       colSet.delete(nameUnique);
       if (wikiUnique) colSet.delete(wikiUnique);
