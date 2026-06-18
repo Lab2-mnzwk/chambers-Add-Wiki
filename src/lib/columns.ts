@@ -641,7 +641,7 @@ export function buildColumnPayload(
     }
     const displayText =
       isCorrectWikiHeader(rawHeader) && tripletDewey
-        ? "DeweyID有りのため入力不要"
+        ? "DeweyIDありのため入力不要"
         : isCellEmpty(value)
           ? "—"
           : String(value).trim();

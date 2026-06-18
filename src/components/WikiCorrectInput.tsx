@@ -212,7 +212,7 @@ export function WikiCorrectInput({
                 >
                   <div className={styles.url}>
                     {s.correctWiki === ""
-                      ? "WikiURL正しい"
+                      ? "Wiki欄変更不要のため入力なし"
                       : s.correctWiki === "-"
                       ? "Wiki該当なし（`-` を入力）"
                       : titles[s.correctWiki]
@@ -243,7 +243,7 @@ export function WikiCorrectInput({
             候補 {suggestions.length} 件 ▾
           </button>
         ) : (
-          <span className={styles.badgeEmpty}>候補無し</span>
+          <span className={styles.badgeEmpty}>候補なし</span>
         )
       )}
     </div>

@@ -23,7 +23,7 @@ function renderColumnBody(
 ) {
   if (col.isWikiEdit && col.tripletDeweyHasValue) {
     return (
-      <div className={styles.deweyLabel}>DeweyID有りのため入力不要</div>
+      <div className={styles.deweyLabel}>DeweyIDありのため入力不要</div>
     );
   }
   if (col.inline) {

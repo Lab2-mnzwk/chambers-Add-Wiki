@@ -735,7 +735,7 @@ export function WorkApp() {
                 disabled={options.fullEditMode}
                 onChange={(e) => setEntityValue(e.target.checked)}
               />
-              Entity値有りのみ
+              Entity値ありのみ
             </label>
             <label className={`${styles.check} ${styles.checkSub}`}>
               <input
