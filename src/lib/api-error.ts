@@ -26,6 +26,11 @@ export function apiErrorResponse(error: unknown): NextResponse {
     credential || raw.includes("ログイン") || raw.includes("認証の有効期限");
   const message = credential ? REAUTH_MESSAGE : raw;
 
+  // 資格情報以外（=500）はサーバーログに原因を残す（候補生成失敗などの調査用）。
+  if (!authRequired) {
+    console.error("[apiError]", error);
+  }
+
   return NextResponse.json(
     { error: message },
     { status: authRequired ? 401 : 500 }

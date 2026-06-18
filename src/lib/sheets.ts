@@ -260,15 +260,22 @@ export async function fetchWikiHistoryFromSheet(
     }
   }
 
-  const batch = await sheets.spreadsheets.values.batchGet({
-    spreadsheetId: SPREADSHEET_ID,
-    ranges,
-  });
+  // レンジ数 × 行数が大きい（例: 29三つ組×4列×30000行 ≒ 117レンジ・350万セル）と
+  // 単一 batchGet が応答過大・タイムアウトで 500 になり、候補が作れなくなる。
+  // レンジを分割して複数回 batchGet し、元の順序で valueRanges を結合する。
+  const BATCH_RANGE_CHUNK = 20;
+  const valueRanges: sheets_v4.Schema$ValueRange[] = [];
+  for (let i = 0; i < ranges.length; i += BATCH_RANGE_CHUNK) {
+    const chunk = ranges.slice(i, i + BATCH_RANGE_CHUNK);
+    const batch = await sheets.spreadsheets.values.batchGet({
+      spreadsheetId: SPREADSHEET_ID,
+      ranges: chunk,
+    });
+    valueRanges.push(...(batch.data.valueRanges ?? []));
+  }
 
   const colAt = (idx: number): string[] =>
-    (batch.data.valueRanges?.[idx]?.values ?? []).map((row) =>
-      String(row[0] ?? "").trim()
-    );
+    (valueRanges[idx]?.values ?? []).map((row) => String(row[0] ?? "").trim());
 
   const statusCol =
     statusRangeIndex >= 0 ? colAt(statusRangeIndex) : [];
