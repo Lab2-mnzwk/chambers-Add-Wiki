@@ -821,6 +821,7 @@ export function WorkApp() {
                 edits={edits}
                 indexRows={options.indexRows}
                 rowKey={rowPayload.sheetRowNumber}
+                eventName={rowPayload.eventName}
                 onEdit={(uniqueName, value) =>
                   setEdits((prev) => ({ ...prev, [uniqueName]: value }))
                 }

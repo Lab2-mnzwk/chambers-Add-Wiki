@@ -767,9 +767,13 @@ export function buildRowPayload(
     assigneeUnique && assigneeUnique in rowByUnique
       ? String(rowByUnique[assigneeUnique] ?? "").trim()
       : "";
+  const eventName = isCellEmpty(rowByUnique["ENTITY_NAME"])
+    ? ""
+    : String(rowByUnique["ENTITY_NAME"]).trim();
   return {
     sheetRowNumber,
     summary: rowSummary(rowByUnique, sheetRowNumber),
+    eventName,
     assignee,
     columns: buildColumnPayload(
       rowByUnique,

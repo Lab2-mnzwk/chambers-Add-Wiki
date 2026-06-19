@@ -53,6 +53,8 @@ export type ColumnPayload = {
 export type RowPayload = {
   sheetRowNumber: number;
   summary: string;
+  /** 出来事名（AC列＝ENTITY_NAME）。文脈検索のクエリに使用。 */
+  eventName: string;
   assignee: string;
   columns: ColumnPayload[];
 };

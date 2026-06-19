@@ -120,8 +120,21 @@
   word-break: break-all;
 }
 
+.readonly a.nameLink {
+  display: inline;
+  font-weight: 600;
+  color: var(--work-readonly);
+}
+
+.linkArrow {
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--work-link);
+}
+
 .googleSearch {
-  display: inline-block;
+  display: block;
+  width: fit-content;
   margin-top: 8px;
   font-size: 12px;
   font-weight: 600;
