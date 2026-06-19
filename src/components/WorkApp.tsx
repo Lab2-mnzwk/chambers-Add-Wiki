@@ -820,6 +820,7 @@ export function WorkApp() {
                 columns={rowPayload.columns}
                 edits={edits}
                 indexRows={options.indexRows}
+                rowKey={rowPayload.sheetRowNumber}
                 onEdit={(uniqueName, value) =>
                   setEdits((prev) => ({ ...prev, [uniqueName]: value }))
                 }

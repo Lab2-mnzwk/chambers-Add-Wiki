@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import styles from "./WorkRowTable.module.css";
 import type { ColumnPayload } from "@/lib/types";
 import { COL_ASSIGNEE, LEADING_COLUMN_PAIRS, WORK_STATUS_OPTIONS } from "@/lib/config";
@@ -12,6 +13,8 @@ type Props = {
   columns: ColumnPayload[];
   edits: Record<string, string>;
   indexRows: number;
+  /** 表示中のシート行番号。変化したら横スクロール位置を先頭に戻す。 */
+  rowKey: number;
   onEdit: (uniqueName: string, value: string) => void;
 };
 
@@ -117,7 +120,13 @@ function renderColumn(
   );
 }
 
-export function WorkRowTable({ columns, edits, indexRows, onEdit }: Props) {
+export function WorkRowTable({ columns, edits, indexRows, rowKey, onEdit }: Props) {
+  const outerRef = useRef<HTMLDivElement>(null);
+  // 行が切り替わったら横スクロール位置を先頭（左端）に戻す。
+  useEffect(() => {
+    if (outerRef.current) outerRef.current.scrollLeft = 0;
+  }, [rowKey]);
+
   const colByHeader = new Map(columns.map((c) => [c.rawHeader, c]));
   const leadingHeaders = new Set<string>(LEADING_COLUMN_PAIRS.flat());
   const leadingPairs = LEADING_COLUMN_PAIRS.map(([top, bottom]) =>
@@ -128,7 +137,7 @@ export function WorkRowTable({ columns, edits, indexRows, onEdit }: Props) {
   const restCols = columns.filter((c) => !leadingHeaders.has(c.rawHeader));
 
   return (
-    <div className={styles.outer}>
+    <div ref={outerRef} className={styles.outer}>
       <div className={styles.track}>
         {leadingPairs.length > 0 && (
           <div className={styles.leadingBlock}>
