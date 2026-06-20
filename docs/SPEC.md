@@ -50,19 +50,21 @@
 
 設定パネルのレイアウト: **PC は作業者名を含め全項目を常時表示**。**スマホは作業者名のみ常時表示**で、それ以外（表示モード・テーマ・キュー操作）は「表示設定等」トグルで折り畳む。
 
-設定の保持: ブラウザの **localStorage**（キー `wikiWorkNext`）に保存（端末/ブラウザ単位。サーバー側の個人別保存はなし）。初回（localStorage 無し）の既定（`defaultOptions`）は **作業者名=「全件表示」/ 完了行スキップ ON / Entity値有りのみ ON / DeweyID付与除く ON / 列表示・編集 OFF**。なお `indexRows`（シート全行をカバーするための取得上限）は **UI から編集せず、`.env.local` の `DEFAULT_INDEX_ROWS`（未設定なら 30000）をサーバー既定として正とする**。bootstrap 時に localStorage の値はサーバー既定へ合わせて上書きされる（古い小さい値での取り込み漏れ防止／値変更の即時反映）。
+設定の保持: ブラウザの **localStorage**（キー `wikiWorkNext`）に保存（端末/ブラウザ単位。サーバー側の個人別保存はなし）。初回（localStorage 無し）の既定（`defaultOptions`）は **作業者名=「全件表示」/ 完了行スキップ ON / Entity値ありのみ ON / DeweyID付与除く ON / 列表示・編集 OFF**。なお `indexRows`（シート全行をカバーするための取得上限）は **UI から編集せず、`.env.local` の `DEFAULT_INDEX_ROWS`（未設定なら 30000）をサーバー既定として正とする**。bootstrap 時に localStorage の値はサーバー既定へ合わせて上書きされる（古い小さい値での取り込み漏れ防止／値変更の即時反映）。
 
-チェックボックスは上から「完了行をスキップ」「Entity値有りのみ」（サブ:「DeweyID付与除く」）「列表示・編集（AN〜GU）」の順。
+行の復元: **最後に開いていた行**を別キー **`wikiWorkLastRow`** に保存し、次回起動（リロード）時に復元する。初回のキュー構築時に一度だけ適用し、**その行が現在のキューに含まれる場合のみ**復元（含まれない＝完了スキップ等で対象外なら従来どおり先頭行から開始）。作業者変更などその後の再読込では効かない。
+
+チェックボックスは上から「完了行をスキップ」「Entity値ありのみ」（サブ:「DeweyID付与除く」）「列表示・編集（AN〜GU）」の順。
 
 | UI 項目 | 既定 | 意味 |
 |------------|------|------|
-| Entity値有りのみ | ON | 名称に値がある Wiki 三つ組を3列セット表示（**名称が空 または `-` は値なし扱いで含めない**）。OFF で全列表示（フィルタなし）。`fullEditMode` ON 時は無効 |
-| └ DeweyID付与除く（サブ） | ON | 「Entity値有りのみ」の下位設定。ON で **DeweyID 有りの三つ組（=確認不要）を除外**し、名称有 かつ DeweyID 無（空/`-`）の組のみ表示。Entity値有りのみ OFF / `fullEditMode` ON のとき無効 |
+| Entity値ありのみ | ON | 名称に値がある Wiki 三つ組を3列セット表示（**名称が空 または `-` は値なし扱いで含めない**）。OFF で全列表示（フィルタなし）。`fullEditMode` ON 時は無効 |
+| └ DeweyID付与除く（サブ） | ON | 「Entity値ありのみ」の下位設定。ON で **DeweyID 有りの三つ組（=確認不要）を除外**し、名称有 かつ DeweyID 無（空/`-`）の組のみ表示。Entity値ありのみ OFF / `fullEditMode` ON のとき無効 |
 | 列表示・編集（AN〜GU）（`fullEditMode`） | OFF | ON のとき下記の全列編集モード。他の表示項目は無効化 |
 
 UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 
-| Entity値有りのみ | DeweyID付与除く | `showNamedTriplets` | `lightBlueOnly` | 表示 |
+| Entity値ありのみ | DeweyID付与除く | `showNamedTriplets` | `lightBlueOnly` | 表示 |
 |---|---|---|---|---|
 | OFF | （無効） | false | false | 全列表示（AC 以降の全列をフィルタなしで表示。空列・三つ組も全部、memo/status 補完なし） |
 | ON | OFF | true | false | 名称有の三つ組セット（Wiki=`-`・deweyID 有無を問わず全部） |
@@ -120,7 +122,7 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 
 ## 編集・保存
 
-- 編集: Status / memo / 正しいwiki のみ（**DeweyID 有りの正しいwiki 列は入力欄なし・「DeweyID有りのため入力不要」表示（小さめ文字）、Wiki 列と同色**）。`fullEditMode` ON 時は上記「列表示・編集モード」参照
+- 編集: Status / memo / 正しいwiki のみ（**DeweyID 有りの正しいwiki 列は入力欄なし・「DeweyIDありのため入力不要」表示（小さめ文字）、Wiki 列と同色**）。`fullEditMode` ON 時は上記「列表示・編集モード」参照
 - **自動保存（移動操作に連動）**: `前の行` / `開く` / `次の行` のいずれを押しても、**未保存の変更があれば移動前に自動保存**する。明示的な保存ボタンは無し（操作感はスプレッドシート的）。
   - **dirty 判定**: 読込時の値スナップショット（`originalEdits`）と現在の `edits` を比較。**差分が無ければ書き込まない**（API も呼ばない）ため、書き込み回数は「移動回数」ではなく「実際に編集した行数」に比例＝負荷を抑制。
   - **保存失敗時は移動を中止**しエラー表示・編集は保持（古いトークン等での取りこぼし防止）。
@@ -138,16 +140,29 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 - **Status（FG）/ Assignee（FH）** は実シートに合わせ **黄色系**（`--work-col-key-bg`、`.keyCol`）。
 - 旧・編集列の黄色強調（全編集列を黄色）は撤去（編集可否は入力欄の有無で判別）。入力欄の枠は水色系に統一。
 
+#### 名称セルの検索リンク（`WorkRowTable.tsx` / `search-links.ts`）
+
+名称（`isWikiName`、値が `—` 以外）セルに 2 つの Google 検索リンクを出す。
+
+- **名称テキスト自体がリンク**: 名称の文字列を Google 検索（`googleSearchUrl`）リンク化し、末尾に小さく `↗` を付ける。クリック範囲＝名称全体。**名称の文字色は通常テキスト色**（`--work-readonly`、Light=黒/Dark=白）、`↗` のみリンク色（`--work-link`）にして省スペースかつリンクと分かるようにする。
+- **文脈検索↗**: 名称の下に常時改行表示（`display:block`）。`contextSearchUrl(eventName, name)` で次のクエリを Google 検索する。
+  - `出来事「{eventName}」における「{名称}」に該当するWiki記事は？`
+  - `eventName` は **出来事名（AC列＝`ENTITY_NAME`）**。`RowPayload.eventName` で受け渡す。空のときは `「{名称}」に該当するWiki記事は？` にフォールバック。
+
+#### 横スクロール位置のリセット
+
+作業表の横スクロール領域（`.outer`）は、**表示行が切り替わると先頭（左端）へ自動リセット**する。`WorkRowTable` に `rowKey`（＝表示中シート行番号）を渡し、変化時に `scrollLeft = 0`。
+
 ## 正しいWiki 補完機能（`WikiCorrectInput` + `/api/wiki-history`）
 
 正しいwiki セルの入力時に、過去の確定値を候補表示する補完機能。
 
-- **候補の生成元**: 作業シートを走査し、`名称 + Wiki` がある三つ組について正しいwiki の値を集計（`aggregateWikiHistory`）。候補対象は **URL** / **`-`（該当なし）** / **空欄（=WikiURL正しい、ただし作業 Status 完了行かつ deweyID 未付与のみ）** の3種。同一 `名称/Wiki/正しいwiki` は件数を加算。インデックス行数は `indexRows`。詳細は `docs/WIKI_HISTORY.md`。
+- **候補の生成元**: 作業シートを走査し、`名称 + Wiki` がある三つ組について正しいwiki の値を集計（`aggregateWikiHistory`）。候補対象は **URL** / **`-`（該当なし）** / **空欄（=Wiki欄変更不要のため入力なし、ただし作業 Status 完了行かつ deweyID 未付与のみ）** の3種。同一 `名称/Wiki/正しいwiki` は件数を加算。インデックス行数は `indexRows`。詳細は `docs/WIKI_HISTORY.md`。
 - **候補の絞り込み**（`suggestWikiHistory`）: 編集中セルの行の `名称`（必要に応じ `Wiki`）をキーに照合。
   - `exact`（name+wiki 一致）を優先、続いて `name のみ一致`。各々 件数降順、最大 8 件。
   - 入力中テキストでさらに部分一致フィルタ（250ms デバウンス）。
-- **表示**: 各候補は `タイトル|URL`（タイトルは `/api/link-preview` で取得）または `Wiki該当なし（`-` を入力）` / `WikiURL正しい`（空欄正解）と、一致種別・件数を表示。クリックでセルへ反映（空欄正解はセルを空に）。
-- **学習（保存時マージ）**: 保存で正しいwiki 列が更新されると、その `名称/Wiki/正しいwiki`（URL/`-`）をメモリ上の履歴インデックスへ追記（`mergeWikiHistoryFromSave`）。さらに **Status を完了に変更した保存**では、deweyID 未付与かつ空欄のままの三つ組を「WikiURL正しい」として学習（`mergeBlankCorrectEntry`）。次回以降の候補に反映される。
+- **表示**: 各候補は `タイトル|URL`（タイトルは `/api/link-preview` で取得）または `Wiki該当なし（`-` を入力）` / `Wiki欄変更不要のため入力なし`（空欄正解）と、一致種別・件数を表示。候補が無いときは `候補なし`。クリックでセルへ反映（空欄正解はセルを空に）。
+- **学習（保存時マージ）**: 保存で正しいwiki 列が更新されると、その `名称/Wiki/正しいwiki`（URL/`-`）をメモリ上の履歴インデックスへ追記（`mergeWikiHistoryFromSave`）。さらに **Status を完了に変更した保存**では、deweyID 未付与かつ空欄のままの三つ組を「Wiki欄変更不要のため入力なし」として学習（`mergeBlankCorrectEntry`）。次回以降の候補に反映される。
 
 ## 作業者名リスト（`loadAssignDiscordNames`）
 
@@ -175,3 +190,4 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 | Sheets API | `src/lib/sheets.ts`, `src/lib/work-service.ts` |
 | 認証・トークン更新 | `src/auth.ts`, `src/lib/google-session.ts`, `src/lib/api-error.ts` |
 | UI | `src/components/WorkApp.tsx`, `WorkRowTable.tsx` |
+| 検索リンク | `src/lib/search-links.ts` |
