@@ -16,6 +16,9 @@
 .headerMain {
   flex: 1 1 auto;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .metaCompact {
@@ -393,4 +396,110 @@
   max-width: 320px;
   z-index: 20;
   color: var(--text-primary);
+}
+
+.helpButton {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border-subtle);
+  background: var(--btn-secondary-bg);
+  color: var(--btn-secondary-text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.helpButton:hover {
+  border-color: var(--link);
+  color: var(--link);
+}
+
+.helpOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 50;
+}
+
+.helpModal {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border: 1px solid var(--border-panel);
+  border-radius: 10px;
+  padding: 16px 18px 20px;
+  width: min(640px, 100%);
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+}
+
+.helpModalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.helpHeading {
+  margin: 0;
+  font-size: 18px;
+}
+
+.helpClose {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: none;
+  background: var(--btn-secondary-bg);
+  color: var(--btn-secondary-text);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.helpClose:hover {
+  color: var(--link);
+}
+
+.helpSection {
+  margin: 16px 0 6px;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.helpTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.helpTable th,
+.helpTable td {
+  border: 1px solid var(--border-subtle);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.helpTable thead th {
+  background: var(--btn-secondary-bg);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.helpTable tbody th {
+  background: var(--bg-input);
+  font-weight: 600;
+  white-space: nowrap;
 }

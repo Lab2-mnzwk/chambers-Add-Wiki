@@ -85,6 +85,95 @@ function editsDiffer(
   return false;
 }
 
+const HELP_ACTIONS: ReadonlyArray<readonly [string, string]> = [
+  ["作業者名", "割り当てられた行だけが表示"],
+  ["全件表示", "すべての行を表示"],
+  ["前の行", "変更を保存して前の行へ"],
+  ["次の行", "変更を保存して次の行へ"],
+  ["開く", "変更を保存して指定した行を開く"],
+  ["リセット", "今の行の変更を読み込み時の状態に戻す"],
+  ["キュー再読込", "担当者・Status など、表示対象行の最新状態をシートから読み直す"],
+  ["キャッシュクリア", "アプリが一時保存している情報を消して再生成、正しいwiki の候補を更新"],
+  ["表示設定等", "スマホでの利用時に表示設定等を開く"],
+];
+
+const HELP_CHECKS: ReadonlyArray<readonly [string, string]> = [
+  ["✓ 完了行をスキップ", "「完了」「完了（正規化変更）」の行を飛ばす"],
+  ["✓ Entity値ありのみ", "Entityが登録されている対象だけを表示"],
+  ["✓ DeweyID付与除く", "すでに DeweyID がある対象を表示しない"],
+  ["✓ 列表示・編集", "広い範囲の列を表示・編集可にする"],
+];
+
+function HelpPopup({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className={styles.helpOverlay}
+      role="dialog"
+      aria-modal="true"
+      aria-label="使い方"
+      onClick={onClose}
+    >
+      <div className={styles.helpModal} onClick={(e) => e.stopPropagation()}>
+        <div className={styles.helpModalHead}>
+          <h2 className={styles.helpHeading}>使い方</h2>
+          <button
+            type="button"
+            className={styles.helpClose}
+            onClick={onClose}
+            aria-label="閉じる"
+          >
+            ×
+          </button>
+        </div>
+
+        <h3 className={styles.helpSection}>ボタン・操作</h3>
+        <table className={styles.helpTable}>
+          <thead>
+            <tr>
+              <th>項目</th>
+              <th>説明</th>
+            </tr>
+          </thead>
+          <tbody>
+            {HELP_ACTIONS.map(([name, desc]) => (
+              <tr key={name}>
+                <th scope="row">{name}</th>
+                <td>{desc}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <h3 className={styles.helpSection}>チェック項目</h3>
+        <table className={styles.helpTable}>
+          <thead>
+            <tr>
+              <th>項目</th>
+              <th>説明</th>
+            </tr>
+          </thead>
+          <tbody>
+            {HELP_CHECKS.map(([name, desc]) => (
+              <tr key={name}>
+                <th scope="row">{name}</th>
+                <td>{desc}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export function WorkApp() {
   const { data: session } = useSession();
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
@@ -105,6 +194,7 @@ export function WorkApp() {
   const [toast, setToast] = useState("");
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [moreSettingsOpen, setMoreSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   // 直近で「キューに適用済み」の識別子（worker/skipDone/indexRows）。
   // 適用が成功したときだけ更新する。作業者変更の判定（位置維持の可否）に使う。
   const appliedQueueKeyRef = useRef<{
@@ -688,6 +778,15 @@ export function WorkApp() {
       <header className={styles.header}>
         <div className={styles.headerMain}>
           <h1 className={styles.title}>PJ140 Wiki付与</h1>
+          <button
+            type="button"
+            className={styles.helpButton}
+            onClick={() => setHelpOpen(true)}
+            aria-label="使い方を表示"
+            title="使い方"
+          >
+            ?
+          </button>
         </div>
         <div className={styles.headerActions}>
           {bootstrap?.authMode === "oauth" && bootstrap.userEmail ? (
@@ -716,6 +815,8 @@ export function WorkApp() {
           )}
         </div>
       </header>
+
+      {helpOpen && <HelpPopup onClose={() => setHelpOpen(false)} />}
 
       <div className={styles.layout}>
         <aside className={styles.settings}>
