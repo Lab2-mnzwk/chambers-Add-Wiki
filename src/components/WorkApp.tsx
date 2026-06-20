@@ -14,6 +14,26 @@ import { applyTheme, loadThemeMode, type ThemeMode } from "@/lib/theme";
 import { ASSIGN_ALL_ROWS_NAME, isDoneStatus } from "@/lib/config";
 
 const PREFS_KEY = "wikiWorkNext";
+const LAST_ROW_KEY = "wikiWorkLastRow";
+
+function loadStoredLastRow(): number | null {
+  try {
+    const raw = localStorage.getItem(LAST_ROW_KEY);
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLastRow(row: number): void {
+  try {
+    localStorage.setItem(LAST_ROW_KEY, String(row));
+  } catch {
+    // localStorage 不可環境は黙って無視。
+  }
+}
 
 const defaultOptions: WorkOptions = {
   // 初回（localStorage 無し）の既定。作業者名は「全件表示」、
@@ -96,6 +116,8 @@ export function WorkApp() {
   // 後発の書込が常に最新。古い in-flight 応答（例: skipDone=ON で算出された
   // キュー）が後から届いて上書きするのを防ぐ。
   const queueWriteSeqRef = useRef(0);
+  // 前回開いていた行（localStorage 復元用）。初回キュー構築時に一度だけ適用する。
+  const pendingRestoreRowRef = useRef<number | null>(null);
 
   const currentRow = useMemo(() => {
     if (historyIndex >= 0 && history[historyIndex]) return history[historyIndex];
@@ -113,6 +135,11 @@ export function WorkApp() {
     () => currentRow != null && queueRows.some((r) => r < currentRow),
     [currentRow, queueRows]
   );
+
+  // 開いている行を記憶し、次回起動時に同じ行を復元する。
+  useEffect(() => {
+    if (currentRow != null) saveLastRow(currentRow);
+  }, [currentRow]);
 
   // 背景化・離脱時の自動保存に使う最新値（イベントリスナのクロージャ陳腐化を避ける）。
   const flushStateRef = useRef({
@@ -245,9 +272,16 @@ export function WorkApp() {
       let nextQueueIndex = queueIndex;
 
       if (!keepPosition || historyIndex < 0) {
-        nextHistory = [rows[0]];
+        // 初回起動時は前回開いていた行を復元（キューに含まれる場合のみ）。
+        let startRow = rows[0];
+        const restore = pendingRestoreRowRef.current;
+        if (restore != null) {
+          pendingRestoreRowRef.current = null;
+          if (rows.includes(restore)) startRow = restore;
+        }
+        nextHistory = [startRow];
         nextHistoryIndex = 0;
-        nextQueueIndex = 0;
+        nextQueueIndex = Math.max(0, rows.indexOf(startRow));
       } else {
         const row = history[historyIndex];
         const idx = rows.indexOf(row);
@@ -277,6 +311,7 @@ export function WorkApp() {
 
   useEffect(() => {
     loadPrefs();
+    pendingRestoreRowRef.current = loadStoredLastRow();
     let cancelled = false;
     fetch("/api/bootstrap")
       .then((r) => r.json())
