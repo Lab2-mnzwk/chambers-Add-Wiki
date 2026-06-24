@@ -131,7 +131,7 @@ const HELP_ACTIONS: ReadonlyArray<readonly [string, string]> = [
 ];
 
 const HELP_CHECKS: ReadonlyArray<readonly [string, string]> = [
-  ["表示する行（進捗）", "すべて / 未完了のみ（完了系を除外）/ 未着手のみ（未着手だけ）"],
+  ["表示する行（進捗）", "すべて / 完了を除く（完了系を除外）/ 未着手のみ（未着手だけ）"],
   [
     "表示する列",
     "Entity値あり / 要確認（DeweyIDなし・既定）/ 編集（AN〜GU）/ すべて",
@@ -900,7 +900,7 @@ export function WorkApp() {
               }
             >
               <option value="all">すべて</option>
-              <option value="incomplete">未完了のみ</option>
+              <option value="incomplete">完了を除く</option>
               <option value="notStarted">未着手のみ</option>
             </select>
 

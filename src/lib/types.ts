@@ -5,13 +5,13 @@ export type QueueFilter =
   | "すべて";
 
 /** 進捗（作業 Status）によるキュー絞り込み。
- * all=すべて / incomplete=未完了のみ（完了系を除外）/ notStarted=未着手のみ */
+ * all=すべて / incomplete=完了を除く（完了系を除外）/ notStarted=未着手のみ */
 export type WorkStatusFilter = "all" | "incomplete" | "notStarted";
 
 export type WorkOptions = {
   worker: string;
   queueFilter: QueueFilter;
-  /** 進捗（作業 Status）によるキュー絞り込み（すべて/未完了のみ/未着手のみ） */
+  /** 進捗（作業 Status）によるキュー絞り込み（すべて/完了を除く/未着手のみ） */
   statusFilter: WorkStatusFilter;
   lightBlueOnly: boolean;
   /** 作業対象列＋名称に値がある三つ組を丸ごと表示する排他モード */
