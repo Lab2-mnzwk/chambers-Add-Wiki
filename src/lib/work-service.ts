@@ -263,7 +263,7 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
   }
 
   // patch 反映後のキャッシュから最新キューを再計算（シート I/O なし）。
-  // skipDone 有効時は完了行が除外されるため、次の行・前の行判定の単一の基準になる。
+  // 進捗フィルタ有効時は対象外の行が除外されるため、次の行・前の行判定の単一の基準になる。
   const records = hasQueueIndex(payload.options.indexRows) ? loadQueueIndex() : null;
   const queueSheetRows = records
     ? filterQueueRows(records, payload.options)

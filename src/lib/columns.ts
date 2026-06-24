@@ -727,8 +727,13 @@ export function filterQueueRows(
   const worker = options.worker.trim();
   let filtered = rows;
 
-  if (options.skipDone) {
+  // 進捗フィルタ: incomplete=完了系を除外 / notStarted=未着手（空欄含む）のみ。
+  if (options.statusFilter === "incomplete") {
     filtered = filtered.filter((r) => !isDoneStatus(r.status));
+  } else if (options.statusFilter === "notStarted") {
+    filtered = filtered.filter(
+      (r) => normalizeWorkStatus(r.status) === STATUS_NOT_STARTED
+    );
   }
 
   // 「全体」は全件表示（Assignee で絞らない）

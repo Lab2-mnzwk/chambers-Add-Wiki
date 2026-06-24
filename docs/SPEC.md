@@ -8,7 +8,7 @@
   - シート前方に別の `Status`（エンティティ Status＝AE 列、値は `Done - 変更有り/なし` 等）が存在するが、**作業 Status とは別物**。解決は「**Assignee 列の直前の `Status`**」を優先する隣接ベース（`resolveWorkStatusUnique`）で、列の増減（deweyID 挿入等）でも追従。エンティティ Status（AE）は無視・**書込禁止**（`WRITE_DENYLIST`）。
 - Assignee: 作業 Assignee（`Assignee` 列。現状 GK 列。名前で解決）
 - **deweyID 列**: 各三つ組は `名称 / deweyID / Wiki / 正しいwiki` の並び。deweyID 列自体は**表示しない**が、「deweyID有りを除く」判定に使う（`WIKI_DEWEY_BY_NAME`）。`-`・空は「値無し」扱い。
-- **完了系ステータス**: `完了` と `完了（正規化変更）` は完了扱い（`DONE_STATUSES` / `isDoneStatus`）。「完了行をスキップ」は両方を除外する。
+- **完了系ステータス**: `完了` と `完了（正規化変更）` は完了扱い（`DONE_STATUSES` / `isDoneStatus`）。進捗フィルタ「未完了のみ」は両方を除外する。
 
 ## 作業表 — 表示列
 
@@ -22,23 +22,26 @@
 ### キュー（表示対象行）
 
 - キューは **作業者名（Discord名）で固定**。選択した作業者の Assignee と一致する行のみが対象（旧「表示対象行」セレクタは廃止）。
-- 「完了行をスキップ」ON で完了系行（`完了` / `完了（正規化変更）`、`isDoneStatus`）を除外。**前後の移動とも同一基準**で判定（下記「キューキャッシュと完了スキップ」）。
+- **進捗フィルタ（`statusFilter`）**: 作業 Status によるキュー絞り込み。ラジオ3択で排他（`filterQueueRows`）。**前後の移動・保存後のキュー再計算・ライブ status 判定（`shouldSkipLiveRow`）も同一基準**。
+  - `all`（すべて）: 絞り込みなし。
+  - `incomplete`（未完了のみ・既定）: 完了系行（`完了` / `完了（正規化変更）`、`isDoneStatus`）を除外（＝未着手＋要確認）。
+  - `notStarted`（未着手のみ）: 正規化後ステータスが「未着手」（空欄含む）の行だけ（要確認・完了系も除外）。
 - **行指定で開く**: 作業者名を選択している場合、Assignee が他の作業者の行は開けない（未担当・自分担当のみ可）。`RowPayload.assignee` で判定。
 
-#### キューキャッシュと完了スキップ（次/前の統一）
+#### キューキャッシュと進捗フィルタ（次/前の統一）
 
-- キュー index は `.cache/<spreadsheetId>.json` の `queueIndex`（行ごとの status/assignee）に保持。`/api/queue` はこのキャッシュから `filterQueueRows` で対象行を算出（シート I/O なし）。`skipDone` は **キャッシュの status** を見て完了行を除外する。
+- キュー index は `.cache/<spreadsheetId>.json` の `queueIndex`（行ごとの status/assignee）に保持。`/api/queue` はこのキャッシュから `filterQueueRows` で対象行を算出（シート I/O なし）。進捗フィルタは **キャッシュの status** を見て対象外行を除外する。
 - 保存で Status が変わると `patchQueueIndex` がキャッシュの status を更新する。
-- 保存（`saveRow`）は **patch 反映後のキャッシュから最新キューを再計算**して返す（`SaveResult.queueSheetRows`、行番号昇順）。「次の行」は現在行より後ろの最初の行（`r > current`）＝最新の未完了行。
-- クライアントは保存応答の `queueSheetRows` で `queueRows` を更新し、**「前の行」もこの最新リストを参照**（`skipDone` 時、リストに無い＝完了/対象外の行は戻り時もスキップ）。
-- **応答順ガード（重要）**: `queueRows` を書き換える非同期処理（`loadQueue` / 保存応答）は世代カウンタ `queueWriteSeqRef` で管理し、**後発の書込のみ採用**。これにより、`skipDone` 切替・作業者/インデックス変更・キュー再読込で `/api/queue` が短時間に複数飛んだ際に、**古い（例: skipDone=ON で算出された）応答が後着で `queueRows` を上書きし、`skipDone` OFF なのに完了行がスキップされる**不具合を防ぐ。
-- **サーバー既定**: `/api/queue` の `skipDone` はパラメータ欠落時 **false**（`=== "true"`）。欠落で意図せず完了スキップしない。クライアントは常に明示送信。
+- 保存（`saveRow`）は **patch 反映後のキャッシュから最新キューを再計算**して返す（`SaveResult.queueSheetRows`、行番号昇順）。「次の行」は現在行より後ろの最初の行（`r > current`）＝最新の対象行。
+- クライアントは保存応答の `queueSheetRows` で `queueRows` を更新し、**「前の行」もこの最新リストを参照**（進捗フィルタ有効時、リストに無い＝対象外の行は戻り時もスキップ）。
+- **応答順ガード（重要）**: `queueRows` を書き換える非同期処理（`loadQueue` / 保存応答）は世代カウンタ `queueWriteSeqRef` で管理し、**後発の書込のみ採用**。これにより、進捗フィルタ切替・作業者/インデックス変更・キュー再読込で `/api/queue` が短時間に複数飛んだ際に、**古い応答が後着で `queueRows` を上書きし、フィルタ設定と食い違う**不具合を防ぐ。
+- **サーバー既定**: `/api/queue` の `statusFilter` はパラメータ不正/欠落時 **`incomplete`（未完了のみ）**。クライアントは常に明示送信。
 
 ##### キャッシュ鮮度（外部編集への追従）
 
 - **行を開くたびに自己修復**: `getRow` は読み込んだ行のライブ status を `patchQueueIndex` でキャッシュへ反映する。アプリ外でシートを直接「完了」にした行も、一度開けば以降の判定・保存再計算・再読込で除外される。
 - **「キュー再読込」は強制リフレッシュ**: ボタン押下時は `/api/queue?...&refresh=true` で `getQueue(options, true)` を呼び、キャッシュを無視して **シートから index（連番/status/assignee）を 1 回の batchGet で取り直す**。これでアプリ外の完了も含めて即座に反映される（行データ・構造・Wiki 履歴は保持＝軽量）。
-- 通常の読込（作業者切替・`skipDone`/`indexRows` 変更など）はキャッシュ利用（`refresh` なし）でシート I/O を抑える。`skipDone` が「効かない」場合は、外部編集でキャッシュが古い可能性があるため「キュー再読込」を実行する。
+- 通常の読込（作業者切替・進捗フィルタ/`indexRows` 変更など）はキャッシュ利用（`refresh` なし）でシート I/O を抑える。フィルタが「効かない」場合は、外部編集でキャッシュが古い可能性があるため「キュー再読込」を実行する。
 - **アイドル明けの自動クリア**: キャッシュに最終アクセス時刻（`lastAccessAt`）を保持し、`/api/bootstrap`（アプリ起動）時に **最終アクセスから `IDLE_CACHE_CLEAR_MS`（既定 30 分。`IDLE_CACHE_CLEAR_MINUTES` で分単位上書き可）以上経過していれば全キャッシュをクリア**する。直後の構造・キュー・行・Wiki 履歴がシートから作り直され、空白期間中の外部編集も自動反映される。
   - `lastAccessAt` は bootstrap / `/api/queue` / `/api/row` の各アクセスで更新される（グローバル＝最後に誰かが使った時刻）。連続利用中（閾値未満の間隔）はクリアされず、キャッシュ効果を維持。
   - クリア判定は **起動（bootstrap）時のみ**。作業途中の行移動でクリアして作業を中断することはない。
@@ -50,25 +53,25 @@
 
 設定パネルのレイアウト: **PC は作業者名を含め全項目を常時表示**。**スマホは作業者名のみ常時表示**で、それ以外（表示モード・テーマ・キュー操作）は「表示設定等」トグルで折り畳む。
 
-設定の保持: ブラウザの **localStorage**（キー `wikiWorkNext`）に保存（端末/ブラウザ単位。サーバー側の個人別保存はなし）。初回（localStorage 無し）の既定（`defaultOptions`）は **作業者名=「全件表示」/ 完了行スキップ ON / Entity値ありのみ ON / DeweyID付与除く ON / 列表示・編集 OFF**。なお `indexRows`（シート全行をカバーするための取得上限）は **UI から編集せず、`.env.local` の `DEFAULT_INDEX_ROWS`（未設定なら 30000）をサーバー既定として正とする**。bootstrap 時に localStorage の値はサーバー既定へ合わせて上書きされる（古い小さい値での取り込み漏れ防止／値変更の即時反映）。
+設定の保持: ブラウザの **localStorage**（キー `wikiWorkNext`）に保存（端末/ブラウザ単位。サーバー側の個人別保存はなし）。初回（localStorage 無し）の既定（`defaultOptions`）は **作業者名=「全件表示」/ 表示する行=「未完了のみ」/ 表示する列=「確認が必要な列のみ」（=Entity値あり かつ DeweyID 未付与）**。旧バージョンの `skipDone` / `onlyNotStarted`（2 boolean）が保存されている場合は `loadStoredOptions` が `statusFilter` へ移行する（`onlyNotStarted`→`notStarted` / `skipDone=false`→`all` / それ以外→`incomplete`）。なお `indexRows`（シート全行をカバーするための取得上限）は **UI から編集せず、`.env.local` の `DEFAULT_INDEX_ROWS`（未設定なら 30000）をサーバー既定として正とする**。bootstrap 時に localStorage の値はサーバー既定へ合わせて上書きされる（古い小さい値での取り込み漏れ防止／値変更の即時反映）。
 
-行の復元: **最後に開いていた行**を別キー **`wikiWorkLastRow`** に保存し、次回起動（リロード）時に復元する。初回のキュー構築時に一度だけ適用し、**その行が現在のキューに含まれる場合のみ**復元（含まれない＝完了スキップ等で対象外なら従来どおり先頭行から開始）。作業者変更などその後の再読込では効かない。
+行の復元: **最後に開いていた行**を別キー **`wikiWorkLastRow`** に保存し、次回起動（リロード）時に復元する。初回のキュー構築時に一度だけ適用し、**その行が現在のキューに含まれる場合のみ**復元（含まれない＝進捗フィルタ等で対象外なら従来どおり先頭行から開始）。作業者変更などその後の再読込では効かない。
 
-チェックボックスは上から「完了行をスキップ」「Entity値ありのみ」（サブ:「DeweyID付与除く」）「列表示・編集（AN〜GU）」の順。
+設定 UI は上から「表示する行（進捗）」（ドロップダウン3択: すべて / 未完了のみ / 未着手のみ）「表示する列」（ドロップダウン4択: Entity値あり / 要確認（DeweyIDなし）/ 編集（AN〜GU）/ すべて）の順。行・列ともに**択一のドロップダウン**で、見出しを対称にしつつ縦の長さを抑える（スマホ配慮）。
 
 | UI 項目 | 既定 | 意味 |
 |------------|------|------|
-| Entity値ありのみ | ON | 名称に値がある Wiki 三つ組を3列セット表示（**名称が空 または `-` は値なし扱いで含めない**）。OFF で全列表示（フィルタなし）。`fullEditMode` ON 時は無効 |
-| └ DeweyID付与除く（サブ） | ON | 「Entity値ありのみ」の下位設定。ON で **DeweyID 有りの三つ組（=確認不要）を除外**し、名称有 かつ DeweyID 無（空/`-`）の組のみ表示。Entity値ありのみ OFF / `fullEditMode` ON のとき無効 |
-| 列表示・編集（AN〜GU）（`fullEditMode`） | OFF | ON のとき下記の全列編集モード。他の表示項目は無効化 |
+| 表示する行（進捗）（`statusFilter`） | 未完了のみ | 3択。**すべて**=絞り込みなし / **未完了のみ**=完了系（`完了` / `完了（正規化変更）`）を除外 / **未着手のみ**=「未着手」（空欄含む）の行だけ（要確認・完了系も除外） |
+| 表示する列 | 要確認（DeweyIDなし） | 4択。**Entity値あり**=名称有の三つ組セット（DeweyID 有無を問わず）/ **要確認（DeweyIDなし）**=名称有 かつ DeweyID 未付与（空/`-`）の三つ組のみ / **編集（AN〜GU）**=下記の全列編集モード / **すべて**=AC 以降の全列（フィルタなし） |
 
-UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
+UI の選択値（`ColumnMode`）は内部フラグへ次のように対応（`src/components/WorkApp.tsx` の `COLUMN_MODE_FLAGS`）。リスト表示順は Entity値あり → 要確認 → 編集 → すべて:
 
-| Entity値ありのみ | DeweyID付与除く | `showNamedTriplets` | `lightBlueOnly` | 表示 |
+| 表示する列 | `fullEditMode` | `showNamedTriplets` | `lightBlueOnly` | 表示 |
 |---|---|---|---|---|
-| OFF | （無効） | false | false | 全列表示（AC 以降の全列をフィルタなしで表示。空列・三つ組も全部、memo/status 補完なし） |
-| ON | OFF | true | false | 名称有の三つ組セット（Wiki=`-`・deweyID 有無を問わず全部） |
-| ON | ON（既定） | false | true | 名称有 **かつ DeweyID 無（空/`-`）** の三つ組セットのみ（DeweyID 有り＝確認不要を除外） |
+| Entity値あり | false | true | false | 名称有の三つ組セット（Wiki=`-`・deweyID 有無を問わず全部） |
+| 要確認（DeweyIDなし・既定） | false | false | true | 名称有 **かつ DeweyID 無（空/`-`）** の三つ組セットのみ（DeweyID 有り＝確認不要を除外） |
+| 編集（AN〜GU） | true | false | false | 下記「列表示・編集モード」 |
+| すべて | false | false | false | 全列表示（AC 以降の全列をフィルタなしで表示。空列・三つ組も全部、memo/status 補完なし） |
 
 ### 名称三つ組 表示モード（`showNamedTriplets`）
 
@@ -127,8 +130,7 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
   - **dirty 判定**: 読込時の値スナップショット（`originalEdits`）と現在の `edits` を比較。**差分が無ければ書き込まない**（API も呼ばない）ため、書き込み回数は「移動回数」ではなく「実際に編集した行数」に比例＝負荷を抑制。
   - **保存失敗時は移動を中止**しエラー表示・編集は保持（古いトークン等での取りこぼし防止）。
   - 保存後は最新キュー（`SaveResult.queueSheetRows`）でクライアントの基準を更新。`次の行`は現在行より後ろの最初のキュー行へ、末尾なら「キューの末尾です。」。
-- **設定変更時も自動保存**: 「完了行をスキップ」/作業者の変更（キュー再読込）や、表示モード切替（`applyDisplayOptions`）でも、**現在行を再読込する前に未保存編集を自動保存**する。これがないと再読込で `edits` が保存値に戻り、未保存の Status 変更等が失われる（保存失敗時は再読込せず編集を保持）。
-  - **保存失敗時のトグル整合**: 「完了行をスキップ」等のキュー系トグルで自動保存が失敗した場合、**トグルを直前の適用値へ自動的に巻き戻す**（`appliedQueueKeyRef`）。チェック状態だけ変わってキューが未再読込のまま食い違う状態を防ぐ。表示モード切替（`applyDisplayOptions`）は保存成功後にのみ `setOptions` するため、失敗時はそもそも切り替わらない。
+- **設定変更時も自動保存**: 進捗フィルタ/作業者の変更（キュー再読込）や、表示モード切替（`applyDisplayOptions`）でも、**現在行を再読込する前に未保存編集を自動保存**する。これがないと再読込で `edits` が保存値に戻り、未保存の Status 変更等が失われる（保存失敗時は再読込せず編集を保持・選択は巻き戻さない）。
 - **背景化・離脱時の保存**: タブ非表示化（`visibilitychange=hidden`）で未保存があれば `fetch(keepalive)` で保存（成功で clean 化）。離脱（`pagehide`）では `navigator.sendBeacon` で最後の保存（ベストエフォート）。hidden 時に保存済みなら beacon は dirty 無しでスキップ。
   - 限界: クラッシュ／強制終了／オフライン等では `pagehide` が届かないことがある。hidden 時保存を一次手段、beacon を保険とする二段構え。
 - **リセット**: 行内編集を読込時の値へ戻すボタン（自動保存で確定する前の取り消し手段）。未保存が無い時は無効。
@@ -169,7 +171,7 @@ UI は内部フラグへ次のように対応（`src/components/WorkApp.tsx`）:
 - 「アサイン」シートの `discord名` 列（2 行目以降）から重複を除いて取得。
 - 集計ラベルは除外（`ASSIGN_NAME_EXCLUDE`、現状「合計」「端数チェック（総件数との差）」）。
 - 作業者名の選択は **キューの担当フィルタ**であり、通常は選択値と Assignee が一致する行のみが対象。
-- 特別値 **「全件表示」**（`ASSIGN_ALL_ROWS_NAME`。シート上のラベル「全体」=`ASSIGN_ALL_ROWS_SHEET_LABEL` を変換）を選ぶと **Assignee で絞らず全行**をキューにする（`skipDone` は引き続き適用）。この場合、行指定で開く際の担当ガードも無効。
+- 特別値 **「全件表示」**（`ASSIGN_ALL_ROWS_NAME`。シート上のラベル「全体」=`ASSIGN_ALL_ROWS_SHEET_LABEL` を変換）を選ぶと **Assignee で絞らず全行**をキューにする（進捗フィルタは引き続き適用）。この場合、行指定で開く際の担当ガードも無効。
 
 ## 認証とトークン更新（OAuth モード）
 

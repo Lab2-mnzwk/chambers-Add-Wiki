@@ -11,7 +11,7 @@ import type {
   WorkOptions,
 } from "@/lib/types";
 import { applyTheme, loadThemeMode, type ThemeMode } from "@/lib/theme";
-import { ASSIGN_ALL_ROWS_NAME, isDoneStatus } from "@/lib/config";
+import { ASSIGN_ALL_ROWS_NAME, isDoneStatus, STATUS_NOT_STARTED } from "@/lib/config";
 
 const PREFS_KEY = "wikiWorkNext";
 const LAST_ROW_KEY = "wikiWorkLastRow";
@@ -40,7 +40,7 @@ const defaultOptions: WorkOptions = {
   // 表示は Entity値有りのみ ON / DeweyID付与除く ON（=確認必要な白セルのみ）。
   worker: ASSIGN_ALL_ROWS_NAME,
   queueFilter: "自分担当",
-  skipDone: true,
+  statusFilter: "incomplete",
   lightBlueOnly: true,
   showNamedTriplets: false,
   fullEditMode: false,
@@ -51,8 +51,16 @@ function loadStoredOptions(): WorkOptions {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
     if (!raw) return defaultOptions;
-    const prefs = JSON.parse(raw) as Partial<WorkOptions>;
-    return { ...defaultOptions, ...prefs, queueFilter: "自分担当" };
+    // 旧バージョンは skipDone / onlyNotStarted の2 boolean を保持。statusFilter へ移行する。
+    const prefs = JSON.parse(raw) as Partial<WorkOptions> & {
+      skipDone?: boolean;
+      onlyNotStarted?: boolean;
+    };
+    const { skipDone, onlyNotStarted, ...rest } = prefs;
+    const statusFilter: WorkOptions["statusFilter"] =
+      rest.statusFilter ??
+      (onlyNotStarted ? "notStarted" : skipDone === false ? "all" : "incomplete");
+    return { ...defaultOptions, ...rest, statusFilter, queueFilter: "自分担当" };
   } catch {
     return defaultOptions;
   }
@@ -62,7 +70,7 @@ function optionsQuery(options: WorkOptions): string {
   const params = new URLSearchParams({
     worker: options.worker,
     queueFilter: options.queueFilter,
-    skipDone: String(options.skipDone),
+    statusFilter: options.statusFilter,
     lightBlueOnly: String(options.lightBlueOnly),
     indexRows: String(options.indexRows),
   });
@@ -85,6 +93,31 @@ function editsDiffer(
   return false;
 }
 
+// 「表示する列」の排他モード。内部フラグ lightBlueOnly / showNamedTriplets /
+// fullEditMode の組み合わせを 1 つの選択値として扱う。
+type ColumnMode = "whiteOnly" | "entityValue" | "allColumns" | "fullEdit";
+
+const COLUMN_MODE_FLAGS: Record<
+  ColumnMode,
+  Pick<WorkOptions, "lightBlueOnly" | "showNamedTriplets" | "fullEditMode">
+> = {
+  // 確認が必要な白セルのみ（Entity値あり かつ DeweyID 未付与）。
+  whiteOnly: { lightBlueOnly: true, showNamedTriplets: false, fullEditMode: false },
+  // Entity値ありの列（DeweyID 付与済みも含む）。
+  entityValue: { lightBlueOnly: false, showNamedTriplets: true, fullEditMode: false },
+  // すべての列（AC 以降をフィルタなしで表示）。
+  allColumns: { lightBlueOnly: false, showNamedTriplets: false, fullEditMode: false },
+  // 全列を編集（AN〜GU）。
+  fullEdit: { lightBlueOnly: false, showNamedTriplets: false, fullEditMode: true },
+};
+
+const COLUMN_MODE_LABELS: ReadonlyArray<readonly [ColumnMode, string]> = [
+  ["entityValue", "Entity値あり"],
+  ["whiteOnly", "要確認（DeweyIDなし）"],
+  ["fullEdit", "編集（AN〜GU）"],
+  ["allColumns", "すべて"],
+];
+
 const HELP_ACTIONS: ReadonlyArray<readonly [string, string]> = [
   ["作業者名", "割り当てられた行だけを表示"],
   ["全件表示", "すべての行を表示"],
@@ -98,10 +131,11 @@ const HELP_ACTIONS: ReadonlyArray<readonly [string, string]> = [
 ];
 
 const HELP_CHECKS: ReadonlyArray<readonly [string, string]> = [
-  ["✓ 完了行をスキップ", "「完了」「完了（正規化変更）」の行を飛ばす"],
-  ["✓ Entity値ありのみ", "Entityが登録されている対象だけを表示"],
-  ["✓ DeweyID付与除く", "すでに DeweyID のある対象を表示しない"],
-  ["✓ 列表示・編集", "広範囲の列を表示・編集"],
+  ["表示する行（進捗）", "すべて / 未完了のみ（完了系を除外）/ 未着手のみ（未着手だけ）"],
+  [
+    "表示する列",
+    "Entity値あり / 要確認（DeweyIDなし・既定）/ 編集（AN〜GU）/ すべて",
+  ],
 ];
 
 function HelpPopup({ onClose }: { onClose: () => void }) {
@@ -152,7 +186,7 @@ function HelpPopup({ onClose }: { onClose: () => void }) {
           </tbody>
         </table>
 
-        <h3 className={styles.helpSection}>チェック項目</h3>
+        <h3 className={styles.helpSection}>表示設定</h3>
         <table className={styles.helpTable}>
           <thead>
             <tr>
@@ -195,15 +229,15 @@ export function WorkApp() {
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [moreSettingsOpen, setMoreSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  // 直近で「キューに適用済み」の識別子（worker/skipDone/indexRows）。
+  // 直近で「キューに適用済み」の識別子（worker/statusFilter/indexRows）。
   // 適用が成功したときだけ更新する。作業者変更の判定（位置維持の可否）に使う。
   const appliedQueueKeyRef = useRef<{
     worker: string;
-    skipDone: boolean;
+    statusFilter: WorkOptions["statusFilter"];
     indexRows: number;
   } | null>(null);
   // queueRows を書き換える非同期処理の世代カウンタ。
-  // 後発の書込が常に最新。古い in-flight 応答（例: skipDone=ON で算出された
+  // 後発の書込が常に最新。古い in-flight 応答（例: 進捗フィルタで算出された
   // キュー）が後から届いて上書きするのを防ぐ。
   const queueWriteSeqRef = useRef(0);
   // 前回開いていた行（localStorage 復元用）。初回キュー構築時に一度だけ適用する。
@@ -314,6 +348,14 @@ export function WorkApp() {
   /** 読み込んだ行のライブな作業 Status 値（GJ 列）。判定不能時は空。 */
   const rowStatusOf = (payload: RowPayload): string =>
     payload.columns.find((c) => c.isStatus)?.value ?? "";
+
+  /** 移動先のライブ status が現在の進捗フィルタで除外対象か。 */
+  const shouldSkipLiveRow = (payload: RowPayload): boolean => {
+    const s = rowStatusOf(payload);
+    if (options.statusFilter === "incomplete") return isDoneStatus(s);
+    if (options.statusFilter === "notStarted") return s !== STATUS_NOT_STARTED;
+    return false;
+  };
 
   const syncEditsFromPayload = (payload: RowPayload) => {
     const next: Record<string, string> = {};
@@ -468,19 +510,19 @@ export function WorkApp() {
     void (async () => {
       setLoading(true);
       try {
-      // キュー再読込（skipDone/indexRows・作業者変更）の前に未保存編集を自動保存する。
+      // キュー再読込（進捗フィルタ/indexRows・作業者変更）の前に未保存編集を自動保存する。
       // 移動操作と同じ挙動に統一し、再読込で編集（例: Status 変更）が消えるのを防ぐ。
       const saved = await saveCurrentIfDirty();
       if (!saved.ok) {
-        // 保存失敗時はトグル選択（skipDone 等）を勝手に巻き戻さない。
+        // 保存失敗時は選択（進捗フィルタ等）を勝手に巻き戻さない。
         // ここでキュー再読込すると未保存編集が失われるため中断するだけにし、
         // エラーは saveCurrentIfDirty が表示済み。次の移動操作で
-        // resolveNavigationQueue が skipDone=false なら最新キューを取り直して自己修復する。
+        // resolveNavigationQueue が「すべて」なら最新キューを取り直して自己修復する。
         return;
       }
       appliedQueueKeyRef.current = {
         worker: options.worker,
-        skipDone: options.skipDone,
+        statusFilter: options.statusFilter,
         indexRows: options.indexRows,
       };
       await loadQueue(options, keepPosition);
@@ -489,7 +531,7 @@ export function WorkApp() {
       }
     })().catch((e) => setMessage(String(e), "error"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bootstrap, options.worker, options.skipDone, options.indexRows]);
+  }, [bootstrap, options.worker, options.statusFilter, options.indexRows]);
 
   const updateOption = <K extends keyof WorkOptions>(
     key: K,
@@ -516,28 +558,17 @@ export function WorkApp() {
     }
   };
 
-  // 表示モードの UI 派生状態（内部フラグ showNamedTriplets / lightBlueOnly へ対応）。
-  // Entity値有りのみ: 名称三つ組をセット表示（OFF=全列表示）。
-  // DeweyID付与除く: 上記のサブ。DeweyID 有りの三つ組を除外。
-  const entityValueOn = options.showNamedTriplets || options.lightBlueOnly;
-  const excludeDeweyOn = !options.showNamedTriplets && options.lightBlueOnly;
+  // 「表示する列」の現在モード（内部フラグから排他値を導出）。
+  const columnMode: ColumnMode = options.fullEditMode
+    ? "fullEdit"
+    : options.showNamedTriplets
+      ? "entityValue"
+      : options.lightBlueOnly
+        ? "whiteOnly"
+        : "allColumns";
 
-  const setEntityValue = (on: boolean) =>
-    void applyDisplayOptions(
-      on
-        ? { ...options, showNamedTriplets: true, lightBlueOnly: false, fullEditMode: false }
-        : { ...options, showNamedTriplets: false, lightBlueOnly: false }
-    );
-
-  const setExcludeDewey = (on: boolean) =>
-    void applyDisplayOptions(
-      on
-        ? { ...options, showNamedTriplets: false, lightBlueOnly: true, fullEditMode: false }
-        : { ...options, showNamedTriplets: true, lightBlueOnly: false }
-    );
-
-  const setFullEditMode = (on: boolean) =>
-    void applyDisplayOptions({ ...options, fullEditMode: on });
+  const setColumnMode = (mode: ColumnMode) =>
+    void applyDisplayOptions({ ...options, ...COLUMN_MODE_FLAGS[mode] });
 
   /**
    * 現在行に未保存の変更があれば保存する（変更なしは何もしない＝書き込み負荷を抑える）。
@@ -581,8 +612,8 @@ export function WorkApp() {
   };
 
   /**
-   * 移動前のキュー取得。skipDone OFF 時はサーバーから再取得し、
-   * 以前 skipDone ON 時にクライアント側で除外された完了行を復元する。
+   * 移動前のキュー取得。進捗フィルタが「すべて」のときはサーバーから再取得し、
+   * 以前の絞り込みでクライアント側から除外された行を復元する。
    */
   const resolveNavigationQueue = async (): Promise<{
     ok: boolean;
@@ -590,7 +621,9 @@ export function WorkApp() {
   }> => {
     const saved = await saveCurrentIfDirty();
     if (!saved.ok) return saved;
-    if (options.skipDone) return saved;
+    // 進捗フィルタ有効時は保存応答のキューがそのまま正。
+    // 「すべて」のときだけサーバーから再取得し、除外されていた行を復元する。
+    if (options.statusFilter !== "all") return saved;
 
     const res = await fetch(`/api/queue?${optionsQuery(options)}`);
     const data = await res.json();
@@ -611,8 +644,8 @@ export function WorkApp() {
       const saved = await resolveNavigationQueue();
       if (!saved.ok) return;
       // goNext と対称に「キュー基準」で前の行（現在行より小さい最大の行番号）を探す。
-      // 履歴ではなくキューを辿るので、skipDone ON 時に積まれなかった完了行も
-      // skipDone OFF にすれば前方向でも到達できる（履歴の欠落でスキップされない）。
+      // 履歴ではなくキューを辿るので、進捗フィルタで積まれなかった行も
+      // 「すべて」にすれば前方向でも到達できる（履歴の欠落でスキップされない）。
       let q = saved.queueRows;
       let cursor = original;
       while (true) {
@@ -627,8 +660,8 @@ export function WorkApp() {
           return;
         }
         const payload = await loadRow(prev, options);
-        // skipDone ON のときだけライブ status が完了の行を飛ばす。
-        if (options.skipDone && isDoneStatus(rowStatusOf(payload))) {
+        // スキップ設定（完了/未着手以外）に該当するライブ status の行を飛ばす。
+        if (shouldSkipLiveRow(payload)) {
           q = q.filter((r) => r !== prev);
           cursor = prev;
           continue;
@@ -724,7 +757,7 @@ export function WorkApp() {
           return;
         }
         const payload = await loadRow(next, options);
-        if (options.skipDone && isDoneStatus(rowStatusOf(payload))) {
+        if (shouldSkipLiveRow(payload)) {
           q = q.filter((r) => r !== next);
           cursor = next;
           continue;
@@ -856,40 +889,32 @@ export function WorkApp() {
                 : styles.settingsMore
             }
           >
-            <label className={styles.check}>
-              <input
-                type="checkbox"
-                checked={options.skipDone}
-                onChange={(e) => updateOption("skipDone", e.target.checked)}
-              />
-              完了行をスキップ
-            </label>
-            <label className={styles.check}>
-              <input
-                type="checkbox"
-                checked={entityValueOn}
-                disabled={options.fullEditMode}
-                onChange={(e) => setEntityValue(e.target.checked)}
-              />
-              Entity値ありのみ
-            </label>
-            <label className={`${styles.check} ${styles.checkSub}`}>
-              <input
-                type="checkbox"
-                checked={excludeDeweyOn}
-                disabled={options.fullEditMode || !entityValueOn}
-                onChange={(e) => setExcludeDewey(e.target.checked)}
-              />
-              DeweyID付与除く
-            </label>
-            <label className={styles.check}>
-              <input
-                type="checkbox"
-                checked={options.fullEditMode}
-                onChange={(e) => setFullEditMode(e.target.checked)}
-              />
-              列表示・編集（AN〜GU）
-            </label>
+            <label className={styles.label}>表示する行（進捗）</label>
+            <select
+              value={options.statusFilter}
+              onChange={(e) =>
+                updateOption(
+                  "statusFilter",
+                  e.target.value as WorkOptions["statusFilter"]
+                )
+              }
+            >
+              <option value="all">すべて</option>
+              <option value="incomplete">未完了のみ</option>
+              <option value="notStarted">未着手のみ</option>
+            </select>
+
+            <label className={styles.label}>表示する列</label>
+            <select
+              value={columnMode}
+              onChange={(e) => setColumnMode(e.target.value as ColumnMode)}
+            >
+              {COLUMN_MODE_LABELS.map(([mode, label]) => (
+                <option key={mode} value={mode}>
+                  {label}
+                </option>
+              ))}
+            </select>
 
             <label className={styles.label}>表示テーマ</label>
             <select
