@@ -795,14 +795,30 @@ export function WorkApp() {
   };
 
   if (bootstrap?.authRequired) {
+    const signedInEmail = bootstrap.userEmail ?? session?.user?.email ?? null;
     return (
       <div className={styles.page}>
         <header className={styles.header}>
           <h1 className={styles.title}>PJ140 Wiki付与</h1>
+          {signedInEmail && (
+            <div className={styles.headerActions}>
+              <div className={styles.userBlock}>
+                <span className={styles.userEmail}>{signedInEmail}</span>
+                <button
+                  type="button"
+                  className={styles.secondary}
+                  onClick={() => signOut({ callbackUrl: "/" })}
+                >
+                  ログアウト
+                </button>
+              </div>
+            </div>
+          )}
         </header>
-        {session?.error && (
+        {(bootstrap.authMessage || session?.error) && (
           <p className={styles.statusError}>
-            Google 認証の有効期限が切れました。再度ログインしてください。
+            {bootstrap.authMessage ??
+              "Google 認証の有効期限が切れました。再度ログインしてください。"}
           </p>
         )}
         <LoginPanel sheetUrl={bootstrap.sheetUrl} />
@@ -826,9 +842,13 @@ export function WorkApp() {
           </button>
         </div>
         <div className={styles.headerActions}>
-          {bootstrap?.authMode === "oauth" && bootstrap.userEmail ? (
+          {session?.user?.email ? (
+            // サインイン中は bootstrap 取得が失敗（権限不足・500 等）しても
+            // ログアウト導線を必ず出す（別アカウントで再ログインできるようにする）。
             <div className={styles.userBlock}>
-              <span className={styles.userEmail}>{bootstrap.userEmail}</span>
+              <span className={styles.userEmail}>
+                {bootstrap?.userEmail ?? session.user.email}
+              </span>
               <button
                 type="button"
                 className={styles.secondary}
@@ -837,9 +857,9 @@ export function WorkApp() {
                 ログアウト
               </button>
             </div>
-          ) : (
+          ) : !bootstrap ? (
             <p className={styles.metaCompact}>読み込み中…</p>
-          )}
+          ) : null}
           {bootstrap && (
             <a
               className={`${styles.sheetLink} ${styles.sheetLinkDesktop}`}

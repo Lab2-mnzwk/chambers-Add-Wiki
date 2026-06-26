@@ -8,7 +8,7 @@ import {
   workSheetEditUrl,
 } from "./config";
 import { auth, isOAuthConfigured } from "@/auth";
-import { isCredentialError } from "./api-error";
+import { isCredentialError, isPermissionError, PERMISSION_MESSAGE } from "./api-error";
 import {
   buildRowPayload,
   buildWritePlan,
@@ -107,10 +107,11 @@ export async function getBootstrap(): Promise<BootstrapPayload> {
   const oauth = isOAuthConfigured();
   const session = oauth ? await auth() : null;
 
-  const authRequiredPayload = (): BootstrapPayload => ({
+  const authRequiredPayload = (authMessage?: string): BootstrapPayload => ({
     authMode: "oauth",
     authRequired: true,
-    userEmail: null,
+    authMessage,
+    userEmail: session?.user?.email ?? null,
     spreadsheetTitle: SPREADSHEET_DISPLAY_TITLE,
     sheetName: SHEET_NAME,
     sheetUrl: workSheetEditUrl(),
@@ -146,9 +147,14 @@ export async function getBootstrap(): Promise<BootstrapPayload> {
     };
   } catch (e) {
     // OAuth で資格情報が無効（期限切れ・refresh 失敗）なら、行き止まりのエラーではなく
-    // ログイン画面を出す（LoginPanel）。それ以外のエラーは従来どおり投げる。
+    // ログイン画面を出す（LoginPanel）。権限不足（シート未共有・スコープ不足）も
+    // 別アカウントでの再ログインで解決し得るため、専用文言でログイン画面へ誘導する。
+    // それ以外のエラーは従来どおり投げる。
     if (oauth && isCredentialError(e)) {
       return authRequiredPayload();
+    }
+    if (oauth && isPermissionError(e)) {
+      return authRequiredPayload(PERMISSION_MESSAGE);
     }
     throw e;
   }

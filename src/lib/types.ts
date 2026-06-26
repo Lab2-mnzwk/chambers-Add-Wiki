@@ -67,6 +67,8 @@ export type RowPayload = {
 export type BootstrapPayload = {
   authMode: "oauth" | "service_account";
   authRequired: boolean;
+  /** authRequired 時に画面へ出す理由。未設定なら既定の再ログイン文言。 */
+  authMessage?: string;
   userEmail: string | null;
   spreadsheetTitle: string;
   sheetName: string;
