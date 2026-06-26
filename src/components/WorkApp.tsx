@@ -136,6 +136,10 @@ const HELP_CHECKS: ReadonlyArray<readonly [string, string]> = [
     "表示する列",
     "Entity値あり / 要確認（DeweyIDなし・既定）/ 編集（AN〜GU）/ すべて",
   ],
+  [
+    "表示する行を変更した直後",
+    "今の行の表示はそのままです。次の行/前の行へ進むと絞り込みが反映されます。",
+  ],
 ];
 
 function HelpPopup({ onClose }: { onClose: () => void }) {
