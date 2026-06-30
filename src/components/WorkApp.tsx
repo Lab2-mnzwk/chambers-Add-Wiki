@@ -16,6 +16,10 @@ import { ASSIGN_ALL_ROWS_NAME, isDoneStatus, STATUS_NOT_STARTED } from "@/lib/co
 const PREFS_KEY = "wikiWorkNext";
 const LAST_ROW_KEY = "wikiWorkLastRow";
 
+// 1回の移動でこの数以上スキップしたら、行を1件ずつ確認し続けず
+// キュー index を一度だけ再構築して最新キューで一気にジャンプする（負荷軽減）。
+const NAV_REFRESH_SKIP_THRESHOLD = 5;
+
 function loadStoredLastRow(): number | null {
   try {
     const raw = localStorage.getItem(LAST_ROW_KEY);
@@ -370,18 +374,27 @@ export function WorkApp() {
     setOriginalEdits(next);
   };
 
-  const loadRow = useCallback(
+  // 表示状態を変えずに行データだけ取得する（移動時の探索用＝途中行を描画しない）。
+  const fetchRowPayload = useCallback(
     async (sheetRowNumber: number, opts: WorkOptions): Promise<RowPayload> => {
-      setMessage("行を読み込み中…");
       const res = await fetch(`/api/row/${sheetRowNumber}?${rowQuery(opts)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "行の読み込みに失敗");
-      setRowPayload(data as RowPayload);
-      syncEditsFromPayload(data as RowPayload);
-      setMessage("");
       return data as RowPayload;
     },
     []
+  );
+
+  const loadRow = useCallback(
+    async (sheetRowNumber: number, opts: WorkOptions): Promise<RowPayload> => {
+      setMessage("行を読み込み中…");
+      const data = await fetchRowPayload(sheetRowNumber, opts);
+      setRowPayload(data);
+      syncEditsFromPayload(data);
+      setMessage("");
+      return data;
+    },
+    [fetchRowPayload]
   );
 
   const loadQueue = useCallback(
@@ -640,36 +653,63 @@ export function WorkApp() {
     return { ok: true, queueRows: rows };
   };
 
+  // 大量スキップ時の負荷軽減: 行を1件ずつ確認し続ける代わりに、サーバーで
+  // キュー index を1回だけ再構築して最新キューを取得する（status 列の単発取得）。
+  const refreshQueueRows = async (): Promise<number[] | null> => {
+    try {
+      const res = await fetch(`/api/queue?${optionsQuery(options)}&refresh=true`);
+      const data = await res.json();
+      if (!res.ok) return null;
+      const rows = (data.sheetRows ?? []) as number[];
+      setQueueRows(rows);
+      return rows;
+    } catch {
+      return null;
+    }
+  };
+
   const goPrev = async () => {
     if (loading) return;
     setLoading(true);
-    const original = currentRow;
     try {
       const saved = await resolveNavigationQueue();
       if (!saved.ok) return;
       // goNext と対称に「キュー基準」で前の行（現在行より小さい最大の行番号）を探す。
-      // 履歴ではなくキューを辿るので、進捗フィルタで積まれなかった行も
-      // 「すべて」にすれば前方向でも到達できる（履歴の欠落でスキップされない）。
+      // 探索中は fetchRowPayload で status 確認のみ行い、途中行は描画しない。
+      // 着地する行が決まって初めて setRowPayload する（ちらつき防止）。
       let q = saved.queueRows;
-      let cursor = original;
+      let cursor = currentRow;
+      let skipped = 0;
+      let refreshed = false;
+      setMessage("前の対象行を探索中…");
       while (true) {
         const from = cursor;
         const prev =
           from != null ? q.filter((r) => r < from).pop() ?? null : null;
         if (prev == null) {
+          // 探索では描画していないので、現在の表示行はそのまま（復元不要）。
+          setMessage("");
           showToast("前の行がありません");
-          if (original != null && cursor !== original) {
-            await loadRow(original, options);
-          }
           return;
         }
-        const payload = await loadRow(prev, options);
+        const payload = await fetchRowPayload(prev, options);
         // スキップ設定（完了/未着手以外）に該当するライブ status の行を飛ばす。
         if (shouldSkipLiveRow(payload)) {
           q = q.filter((r) => r !== prev);
           cursor = prev;
+          skipped += 1;
+          if (!refreshed && skipped >= NAV_REFRESH_SKIP_THRESHOLD) {
+            refreshed = true;
+            const refreshedRows = await refreshQueueRows();
+            if (refreshedRows) q = refreshedRows;
+          }
           continue;
         }
+        // 着地: ここで初めて描画する。
+        setRowPayload(payload);
+        syncEditsFromPayload(payload);
+        setMessage("");
+        setQueueRows(q);
         const nextHistory = history.slice(0, historyIndex + 1);
         nextHistory.push(prev);
         setHistory(nextHistory);
@@ -741,31 +781,43 @@ export function WorkApp() {
   const goNext = async () => {
     if (loading) return;
     setLoading(true);
-    const original = currentRow;
     try {
       const saved = await resolveNavigationQueue();
       if (!saved.ok) return;
       // キュー・スナップショットは古い可能性がある（外部/別セッションでの完了など）。
-      // 移動先のライブ status が完了なら、その行をスナップショットから外して次へ進む。
+      // 探索中は fetchRowPayload で status 確認のみ行い、途中行は描画しない。
+      // 移動先のライブ status が対象外なら外して次へ進み、着地行だけ描画する。
       let q = saved.queueRows;
-      let cursor = original;
+      let cursor = currentRow;
+      let skipped = 0;
+      let refreshed = false;
+      setMessage("次の対象行を探索中…");
       while (true) {
         const from = cursor;
         const next =
           from != null ? q.find((r) => r > from) ?? null : q[0] ?? null;
         if (next == null) {
+          // 探索では描画していないので、現在の表示行はそのまま（復元不要）。
           setMessage("キューの末尾です。", "ok");
-          if (original != null && cursor !== original) {
-            await loadRow(original, options);
-          }
           return;
         }
-        const payload = await loadRow(next, options);
+        const payload = await fetchRowPayload(next, options);
         if (shouldSkipLiveRow(payload)) {
           q = q.filter((r) => r !== next);
           cursor = next;
+          skipped += 1;
+          if (!refreshed && skipped >= NAV_REFRESH_SKIP_THRESHOLD) {
+            refreshed = true;
+            const refreshedRows = await refreshQueueRows();
+            if (refreshedRows) q = refreshedRows;
+          }
           continue;
         }
+        // 着地: ここで初めて描画する。
+        setRowPayload(payload);
+        syncEditsFromPayload(payload);
+        setMessage("");
+        setQueueRows(q);
         const nextHistory = history.slice(0, historyIndex + 1);
         nextHistory.push(next);
         setHistory(nextHistory);
