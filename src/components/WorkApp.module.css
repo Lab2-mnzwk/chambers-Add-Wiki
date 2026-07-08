@@ -472,6 +472,21 @@
   color: var(--link);
 }
 
+.helpGuideLink {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.helpGuideLink a {
+  color: var(--link);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.helpGuideLink a:hover {
+  text-decoration: underline;
+}
+
 .helpSection {
   margin: 16px 0 6px;
   font-size: 14px;

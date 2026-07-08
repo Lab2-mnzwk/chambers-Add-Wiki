@@ -176,6 +176,12 @@ function HelpPopup({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
+        <p className={styles.helpGuideLink}>
+          <a href="/guide" target="_blank" rel="noopener noreferrer">
+            詳しい使い方ガイドを開く ↗
+          </a>
+        </p>
+
         <h3 className={styles.helpSection}>ボタン・操作</h3>
         <table className={styles.helpTable}>
           <thead>
