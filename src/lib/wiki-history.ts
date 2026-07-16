@@ -1,12 +1,6 @@
-import type { SheetStructure } from "./types";
-import {
-  isCellEmpty,
-  isHttpUrl,
-  resolveHeaderToUnique,
-  resolveWorkStatusUnique,
-  tripletDeweyHasValue,
-} from "./columns";
-import { isDoneStatus, WIKI_TRIPLET_RULES } from "./config";
+import type { SheetRules } from "./types";
+import { isHttpUrl, tripletDeweyHasValue } from "./columns";
+import { isDoneStatus } from "./config";
 
 /** 「Wiki値そのまま正解（正しいWiki空欄）」を表す内部 correctWiki 値（空文字）。 */
 export const BLANK_CORRECT_VALUE = "";
@@ -114,32 +108,6 @@ export function aggregateWikiHistory(
   };
 }
 
-/** シート行データから正しいwiki が入っている三つ組だけ抽出 */
-export function extractWikiHistoryFromRow(
-  rowByUnique: Record<string, string>,
-  rawHeaders: string[],
-  uniqueHeaders: string[]
-): Array<{ name: string; wiki: string; correctWiki: string }> {
-  const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
-  const found: Array<{ name: string; wiki: string; correctWiki: string }> = [];
-
-  for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
-    const nameUnique = headerMap[nameHeader];
-    const wikiUnique = headerMap[wikiHeader];
-    const okUnique = headerMap[okHeader];
-    if (!nameUnique || !wikiUnique || !okUnique) continue;
-
-    const name = String(rowByUnique[nameUnique] ?? "").trim();
-    const wiki = String(rowByUnique[wikiUnique] ?? "").trim();
-    const correctWiki = String(rowByUnique[okUnique] ?? "").trim();
-    if (isCellEmpty(name) || isCellEmpty(wiki) || isCellEmpty(correctWiki)) continue;
-
-    found.push({ name, wiki, correctWiki });
-  }
-
-  return found;
-}
-
 function upsertHistoryEntry(
   index: WikiHistoryIndex,
   name: string,
@@ -195,26 +163,25 @@ export function mergeBlankCorrectEntry(
 /** 保存された正しいwiki 列だけ履歴にマージ */
 export function mergeWikiHistoryFromSave(
   index: WikiHistoryIndex,
+  rules: SheetRules,
   rowByUnique: Record<string, string>,
-  rawHeaders: string[],
-  uniqueHeaders: string[],
   editedUniqueNames: Set<string>
 ): WikiHistoryIndex {
-  const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
+  const { headerMap } = rules;
   let result = index;
 
   // 今回の保存で作業 Status が完了系に変更されたか。完了確定時に、
   // 名称・Wiki があり正しいWiki空欄の三つ組を「Wiki値正しい」として学習する。
-  const statusUnique = resolveWorkStatusUnique(rawHeaders, uniqueHeaders);
+  const statusUnique = rules.statusUnique;
   const statusDoneNow =
     !!statusUnique &&
     editedUniqueNames.has(statusUnique) &&
     isDoneStatus(String(rowByUnique[statusUnique] ?? ""));
 
-  for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
-    const okUnique = headerMap[okHeader];
-    const nameUnique = headerMap[nameHeader];
-    const wikiUnique = headerMap[wikiHeader];
+  for (const t of rules.triplets) {
+    const okUnique = headerMap[t.ok];
+    const nameUnique = headerMap[t.name];
+    const wikiUnique = headerMap[t.wiki];
     if (!okUnique || !nameUnique || !wikiUnique) continue;
 
     const name = String(rowByUnique[nameUnique] ?? "").trim();
@@ -230,13 +197,35 @@ export function mergeWikiHistoryFromSave(
       name &&
       wiki &&
       correctWiki === "" &&
-      !tripletDeweyHasValue(nameHeader, rowByUnique, headerMap)
+      !tripletDeweyHasValue(rules, t.name, rowByUnique)
     ) {
       result = mergeBlankCorrectEntry(result, name, wiki);
     }
   }
 
   return result;
+}
+
+/** 複数シートの履歴インデックスを 1 本に統合（同一 name/wiki/correctWiki は件数合算）。 */
+export function combineWikiHistories(
+  indexes: WikiHistoryIndex[]
+): WikiHistoryIndex {
+  const map = new Map<string, WikiHistoryEntry>();
+  let indexRows = 0;
+  for (const idx of indexes) {
+    indexRows = Math.max(indexRows, idx.indexRows);
+    for (const e of idx.entries) {
+      const key = entryKey(e.name, e.wiki, e.correctWiki);
+      const existing = map.get(key);
+      if (existing) existing.count += e.count;
+      else map.set(key, { ...e });
+    }
+  }
+  return {
+    indexRows,
+    builtAt: Date.now(),
+    entries: [...map.values()].sort((a, b) => b.count - a.count),
+  };
 }
 
 /** name + wiki に基づく候補（正しいwiki が過去に記録されたもののみ） */
@@ -300,27 +289,4 @@ export function wikiHistoryStats(index: WikiHistoryIndex): {
     indexRows: index.indexRows,
     builtAt: index.builtAt,
   };
-}
-
-/** 列構造から三つ組の unique 名リストを返す（Sheets 読取準備用） */
-export function listWikiTripletColumns(structure: SheetStructure): Array<{
-  nameUnique: string;
-  wikiUnique: string;
-  okUnique: string;
-}> {
-  const headerMap = resolveHeaderToUnique(
-    structure.rawHeaders,
-    structure.uniqueHeaders
-  );
-  const cols: Array<{ nameUnique: string; wikiUnique: string; okUnique: string }> =
-    [];
-
-  for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
-    const nameUnique = headerMap[nameHeader];
-    const wikiUnique = headerMap[wikiHeader];
-    const okUnique = headerMap[okHeader];
-    if (!nameUnique || !wikiUnique || !okUnique) continue;
-    cols.push({ nameUnique, wikiUnique, okUnique });
-  }
-  return cols;
 }

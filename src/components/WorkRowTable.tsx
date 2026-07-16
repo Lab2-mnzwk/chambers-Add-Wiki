@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import styles from "./WorkRowTable.module.css";
 import type { ColumnPayload } from "@/lib/types";
-import { COL_ASSIGNEE, LEADING_COLUMN_PAIRS, WORK_STATUS_OPTIONS } from "@/lib/config";
+import { LEADING_COLUMN_PAIRS, WORK_STATUS_OPTIONS } from "@/lib/config";
 import { isHttpUrl } from "@/lib/columns";
 import { contextSearchUrl, googleSearchUrl } from "@/lib/search-links";
 import { LinkWithPreview } from "./LinkWithPreview";
@@ -13,8 +13,8 @@ type Props = {
   columns: ColumnPayload[];
   edits: Record<string, string>;
   indexRows: number;
-  /** 表示中のシート行番号。変化したら横スクロール位置を先頭に戻す。 */
-  rowKey: number;
+  /** 表示中の行の識別子（シート＋行番号）。変化したら横スクロール位置を先頭に戻す。 */
+  rowKey: string;
   /** 出来事名（AC列）。文脈検索リンクのクエリに使用。 */
   eventName: string;
   onEdit: (uniqueName: string, value: string) => void;
@@ -126,7 +126,7 @@ function renderColumn(
   // 3列セット（名称/Wiki/正しいwiki）と memo は実シート同様の水色系。編集欄の有無で可否は分かる。
   if (col.isWiki || col.isMemo) classes.push(styles.wiki);
   // Status / Assignee は実シート同様の黄色系。
-  if (col.isStatus || col.rawHeader === COL_ASSIGNEE) classes.push(styles.keyCol);
+  if (col.isStatus || col.isAssignee) classes.push(styles.keyCol);
 
   return (
     <div key={col.uniqueName} className={classes.join(" ")}>

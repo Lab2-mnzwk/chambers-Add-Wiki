@@ -19,9 +19,54 @@ export const SPREADSHEET_ID = resolveSpreadsheetId(process.env.SPREADSHEET_ID);
 /** 画面上部に表示するスプレッドシート名（API のファイル名とは別に固定可） */
 export const SPREADSHEET_DISPLAY_TITLE =
   process.env.SPREADSHEET_DISPLAY_TITLE ?? "PJ140_wiki付与_view_test";
-/** 作業シートのタブ名。シート名変更に備え環境変数 SHEET_NAME で上書き可能。 */
-export const SHEET_NAME =
-  process.env.SHEET_NAME ?? "wiki付与作業シート（第一弾、第二弾）";
+
+/**
+ * 作業対象シート（タブ）の定義。複数シートを 1 本の通しキューとして扱う。
+ * 列レイアウト（三つ組の名称・個数・Status/Assignee 列名）はシートごとに異なるため、
+ * 実際の列ルールは各シートのヘッダーから構造検出する（sheet-rules.ts）。
+ * ここでは検出に必要な最小限（タブ名・表示名・担当列ヘッダー名）だけを持つ。
+ */
+export type SheetConfig = {
+  /** URL/キャッシュキー等で使う安定 ID */
+  id: string;
+  /** スプレッドシート上のタブ名 */
+  name: string;
+  /** 画面表示用の短い名称 */
+  label: string;
+  /** 担当（Assignee）列のヘッダー名。作業 Status は「この列の直前の Status」で解決する。 */
+  assigneeHeader: string;
+};
+
+/** キューの通し順（第一二弾 → 第三弾）。 */
+export const WORK_SHEETS: SheetConfig[] = [
+  {
+    id: "s12",
+    name: process.env.SHEET_NAME ?? "wiki付与作業シート（第一弾、第二弾）",
+    label: "第一二弾",
+    assigneeHeader: "Assignee",
+  },
+  {
+    id: "s3",
+    name: process.env.SHEET_NAME_3 ?? "wiki付与作業シート（第三弾）",
+    label: "第三弾",
+    assigneeHeader: "wiki付与Assignee",
+  },
+];
+
+export const DEFAULT_SHEET: SheetConfig = WORK_SHEETS[0];
+
+export function getSheetById(id: string | null | undefined): SheetConfig | null {
+  if (!id) return null;
+  return WORK_SHEETS.find((s) => s.id === id) ?? null;
+}
+
+export function getSheetByName(name: string): SheetConfig | null {
+  return WORK_SHEETS.find((s) => s.name === name) ?? null;
+}
+
+/** 後方互換: 単一シート参照が残る箇所向けの既定タブ名。 */
+export const SHEET_NAME = DEFAULT_SHEET.name;
+
 export const ASSIGN_SHEET_NAME = process.env.ASSIGN_SHEET_NAME ?? "アサイン";
 export const DISCORD_NAME_COLUMN = "discord名";
 /** アサインシートの discord名 列に含まれる作業者以外の集計ラベル（作業者リストから除外） */
@@ -31,6 +76,7 @@ export const ASSIGN_ALL_ROWS_NAME = "全件表示";
 /** アサインシート上の全件ラベル（表示名 ASSIGN_ALL_ROWS_NAME に変換） */
 export const ASSIGN_ALL_ROWS_SHEET_LABEL = "全体";
 
+/** 後方互換の既定 Status/Assignee ヘッダー名（実際は sheet-rules が解決）。 */
 export const COL_STATUS_WORK = "Status.1";
 export const COL_ASSIGNEE = "Assignee";
 
@@ -80,139 +126,38 @@ export const LEADING_COLUMN_PAIRS = [
 export const LEADING_FIXED_HEADERS = LEADING_COLUMN_PAIRS.flat();
 
 export const WORK_TABLE_START_HEADER = "ENTITY_NAME";
-// 作業 Status / Assignee の既定位置（フォールバック用）。
-// 実際の解決は「Assignee 列の直前の Status を作業 Status とする」名前＋隣接ベース
-// （resolveWorkStatusUnique / resolveWorkAssigneeUnique）を優先。シート列増減時はこの解決が追従し、
-// レターは effectiveColCount / フォールバックでのみ参照する。
-export const WORK_STATUS_COL_LETTER = "GJ";
-export const WORK_ASSIGNEE_COL_LETTER = "GK";
+
+/** 三つ組のカテゴリ見出し列（構造検出でセクション対応付けに使用）。両シート共通。 */
+export const SECTION_HEADERS = [
+  "Agent",
+  "Patient-Theme",
+  "Place",
+  "Territory",
+] as const;
+
+/** 役割列（全列編集モードで自由入力可にする）。両シート共通。 */
+export const ROLE_HEADERS = [
+  "Action",
+  "Instrument",
+  "Manner",
+  "Cause",
+  "Purpose",
+  "Probability",
+] as const;
+
+/** memo 列ヘッダーの接尾辞。 */
+export const MEMO_HEADER_SUFFIX = "_memo";
+
 /**
  * キュー index / Wiki 履歴で読み取る最大データ行数（2行目以降）。
- * シート全行をカバーする必要があるため、行数増加に備え環境変数 DEFAULT_INDEX_ROWS で上書き可能。
- * 既定 30000（現行〜将来の総行数を包含）。
+ * 各シートの全行をカバーする必要があるため、行数増加に備え環境変数 DEFAULT_INDEX_ROWS で上書き可能。
+ * 既定 30000（各シートの総行数を包含）。
  */
 export const DEFAULT_INDEX_ROWS = (() => {
   const raw = Number(process.env.DEFAULT_INDEX_ROWS);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 30000;
 })();
 export const WRITE_DENYLIST_COL_LETTERS = new Set(["AE"]);
-
-/**
- * 全列表示・編集モード: 表示する列の範囲（列レター, 両端含む）。
- * 第二弾レイアウト（各三つ組に deweyID 列が挿入され末尾が GU まで拡張）に対応。
- * 三つ組は4列セット（名称 / deweyID / Wiki / 正しいwiki）として表示・編集する。
- */
-export const FULL_EDIT_DISPLAY_RANGE: [string, string] = ["AN", "GU"];
-/**
- * 全列表示・編集モード: 自由入力で編集可能にする列レター範囲（両端含む）。
- * deweyID を含む4列セット・memo・役割列（Action〜Purpose）を編集可にする。
- * Status(GJ)＝ドロップダウン / Assignee(GK)＝読取 は範囲外に置き自由入力対象から除外。
- */
-export const FULL_EDIT_COLUMN_RANGES: [string, string][] = [
-  ["AN", "GI"],
-  ["GM", "GU"],
-];
-/**
- * 全列表示・編集モード: 表示範囲内でも非表示にする列レター範囲（両端含む）。
- * 集約名 / _auto / _lang / Entity数 / wiki結合 などのヘルパー列を隠す。
- */
-export const FULL_EDIT_HIDDEN_RANGES: [string, string][] = [
-  ["BU", "CD"], // A_Entity数・A_Wiki結合・_Agent_Category__auto_lang・Patient-Theme 集約/auto 群
-  ["DH", "DQ"], // P-T_Entity数・P-T_wiki結合・_lang・Place 集約/auto 群
-  ["EM", "EV"], // Pl_Entity数・Pl_wiki結合・_lang・Territory 集約/auto 群
-  ["GH", "GI"], // Te_Entity数・Te_wiki結合
-  ["GL", "GL"], // _Territory_Category__auto_lang
-  ["GN", "GN"], // _Action_lang
-  ["GP", "GP"], // _Instrument_lang
-  ["GR", "GR"], // _Manner_lang
-  ["GT", "GT"], // _Cause_lang
-];
-
-export const MEMO_WORK_HEADERS = [
-  "Agent_memo",
-  "Place_memo",
-  "Patient-Theme_memo",
-  "Territory_memo",
-] as const;
-
-export const MEMO_SECTION_BY_HEADER: Record<string, string> = {
-  Agent_memo: "Agent",
-  Place_memo: "Place",
-  "Patient-Theme_memo": "Patient-Theme",
-  Territory_memo: "Territory",
-};
-
-function buildLightBlueWorkHeaders(): Set<string> {
-  const names = new Set<string>([
-    "Agent_memo",
-    "Place_memo",
-    "Patient-Theme_memo",
-    "Territory_memo",
-  ]);
-  for (let i = 1; i <= 5; i++) names.add(`A_name${i}`);
-  for (let i = 6; i <= 8; i++) names.add(`A_${i}`);
-  for (let i = 1; i <= 8; i++) {
-    names.add(`A_Wiki${i}`);
-    names.add(`A_正しいwiki${i}`);
-  }
-  for (let i = 1; i <= 5; i++) {
-    names.add(`Pl_name${i}`);
-    names.add(`Pl_Wiki${i}`);
-    names.add(`Pl_正しいwiki${i}`);
-  }
-  for (let i = 1; i <= 7; i++) {
-    names.add(`P-T_${i}`);
-    names.add(`P-T_Wiki${i}`);
-    names.add(`P-T_正しいwiki${i}`);
-  }
-  for (let i = 1; i <= 9; i++) {
-    names.add(`Te_name${i}`);
-    names.add(`Te_Wiki${i}`);
-    names.add(`Te_正しいwiki${i}`);
-  }
-  return names;
-}
-
-export const LIGHT_BLUE_WORK_HEADERS = buildLightBlueWorkHeaders();
-
-export function buildWikiTripletRules(): [string, string, string][] {
-  const rules: [string, string, string][] = [];
-  for (let i = 1; i <= 5; i++) {
-    rules.push([`A_name${i}`, `A_Wiki${i}`, `A_正しいwiki${i}`]);
-  }
-  for (let i = 6; i <= 8; i++) {
-    rules.push([`A_${i}`, `A_Wiki${i}`, `A_正しいwiki${i}`]);
-  }
-  for (let i = 1; i <= 5; i++) {
-    rules.push([`Pl_name${i}`, `Pl_Wiki${i}`, `Pl_正しいwiki${i}`]);
-  }
-  for (let i = 1; i <= 7; i++) {
-    rules.push([`P-T_${i}`, `P-T_Wiki${i}`, `P-T_正しいwiki${i}`]);
-  }
-  for (let i = 1; i <= 9; i++) {
-    rules.push([`Te_name${i}`, `Te_Wiki${i}`, `Te_正しいwiki${i}`]);
-  }
-  return rules;
-}
-
-export const WIKI_TRIPLET_RULES = buildWikiTripletRules();
-
-/**
- * 各三つ組（名称列ヘッダー）に対応する deweyID 列ヘッダー。
- * 例: A_name1 → A_deweyID1 / A_6 → A_deweyID6 / P-T_1 → P-T_deweyID1。
- * deweyID 列自体は表示しない（「deweyID有りを除く」判定にのみ使用）。
- */
-export function buildWikiDeweyByName(): Record<string, string> {
-  const map: Record<string, string> = {};
-  for (let i = 1; i <= 5; i++) map[`A_name${i}`] = `A_deweyID${i}`;
-  for (let i = 6; i <= 8; i++) map[`A_${i}`] = `A_deweyID${i}`;
-  for (let i = 1; i <= 5; i++) map[`Pl_name${i}`] = `Pl_deweyID${i}`;
-  for (let i = 1; i <= 7; i++) map[`P-T_${i}`] = `P-T_deweyID${i}`;
-  for (let i = 1; i <= 9; i++) map[`Te_name${i}`] = `Te_deweyID${i}`;
-  return map;
-}
-
-export const WIKI_DEWEY_BY_NAME = buildWikiDeweyByName();
 
 export function workSheetEditUrl(): string {
   return `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/edit`;

@@ -1,11 +1,16 @@
 import {
+  ASSIGN_ALL_ROWS_NAME,
+  ASSIGN_NAME_EXCLUDE,
   DEFAULT_INDEX_ROWS,
+  DEFAULT_SHEET,
   ENABLE_SHEET_WRITES,
+  getSheetById,
   IDLE_CACHE_CLEAR_MS,
-  SHEET_NAME,
   SPREADSHEET_DISPLAY_TITLE,
+  WORK_SHEETS,
   WORK_STATUS_OPTIONS,
   workSheetEditUrl,
+  type SheetConfig,
 } from "./config";
 import { auth, isOAuthConfigured } from "@/auth";
 import { isCredentialError, isPermissionError, PERMISSION_MESSAGE } from "./api-error";
@@ -16,6 +21,7 @@ import {
   filterQueueRows,
   rowByUniqueFromValues,
 } from "./columns";
+import { buildSheetRules } from "./sheet-rules";
 import {
   executeWritePlan,
   fetchQueueIndex,
@@ -25,8 +31,8 @@ import {
   loadSheetStructure,
 } from "./sheets";
 import {
-  cacheStats,
-  clearCache,
+  cacheStats as storeCacheStats,
+  clearAllCaches,
   getLastAccessAt,
   getRowValues,
   getStructure,
@@ -44,52 +50,102 @@ import {
 } from "./store";
 import type {
   BootstrapPayload,
+  QueueEntry,
   RowPayload,
   SavePayload,
   SaveResult,
+  SheetRules,
   SheetStructure,
   WorkOptions,
 } from "./types";
 import {
   aggregateWikiHistory,
+  combineWikiHistories,
   mergeWikiHistoryFromSave,
   suggestWikiHistory,
   type WikiHistoryIndex,
   type WikiHistorySuggestion,
 } from "./wiki-history";
 
-export { clearCache, cacheStats };
-
 /**
- * アクセスが IDLE_CACHE_CLEAR_MS 以上空いていたら全キャッシュをクリアする。
- * 直後の ensureStructure / getQueue / getRow / ensureWikiHistory が
- * シートから作り直すため、アイドル明けの初回アクセスで最新化される。
- * 連続利用中（閾値未満の間隔）は何もしないのでキャッシュ効果は維持される。
+ * アクセスが IDLE_CACHE_CLEAR_MS 以上空いていたら全シートのキャッシュをクリアする。
+ * 直後の ensureStructure / getQueue / getRow / ensureWikiHistory がシートから作り直す。
  */
 function clearCacheIfIdle(now: number = Date.now()): void {
-  const lastAccessAt = getLastAccessAt();
-  if (lastAccessAt !== null && now - lastAccessAt >= IDLE_CACHE_CLEAR_MS) {
-    clearCache();
+  let latest: number | null = null;
+  for (const sheet of WORK_SHEETS) {
+    const t = getLastAccessAt(sheet.id);
+    if (t !== null) latest = latest === null ? t : Math.max(latest, t);
+  }
+  if (latest !== null && now - latest >= IDLE_CACHE_CLEAR_MS) {
+    clearAllCaches();
   }
 }
 
-async function ensureStructure(): Promise<SheetStructure> {
-  let structure = getStructure();
+async function ensureStructure(sheet: SheetConfig): Promise<SheetStructure> {
+  let structure = getStructure(sheet.id);
   if (!structure) {
-    structure = await loadSheetStructure();
-    setStructure(structure);
+    structure = await loadSheetStructure(sheet);
+    setStructure(sheet.id, structure);
   }
   return structure;
 }
 
-export async function ensureWikiHistory(indexRows: number): Promise<WikiHistoryIndex> {
-  if (hasWikiHistory(indexRows)) {
-    return getWikiHistory()!;
+function rulesFor(sheet: SheetConfig, structure: SheetStructure): SheetRules {
+  return buildSheetRules(structure, sheet.assigneeHeader);
+}
+
+async function ensureQueueIndex(
+  sheet: SheetConfig,
+  indexRows: number,
+  forceRefresh: boolean
+) {
+  if (!forceRefresh && hasQueueIndex(sheet.id, indexRows)) {
+    return loadQueueIndex(sheet.id);
   }
-  const structure = await ensureStructure();
-  const raw = await fetchWikiHistoryFromSheet(structure, indexRows);
+  const structure = await ensureStructure(sheet);
+  const rules = rulesFor(sheet, structure);
+  const records = await fetchQueueIndex(sheet, rules, indexRows);
+  saveQueueIndex(sheet.id, records, indexRows);
+  return records;
+}
+
+/**
+ * 各作業シートの Assignee 列に実在する担当名のうち、既知（アサインシート由来）に
+ * 無いものを収集する。キュー index（担当列を含む）をシートから取得済みならそれを使う。
+ */
+async function collectExtraAssignees(
+  indexRows: number,
+  known: Set<string>
+): Promise<string[]> {
+  const seen = new Set(known);
+  const excluded = new Set(ASSIGN_NAME_EXCLUDE);
+  const extras: string[] = [];
+  for (const sheet of WORK_SHEETS) {
+    const records = await ensureQueueIndex(sheet, indexRows, false);
+    for (const r of records) {
+      const name = r.assignee.trim();
+      if (!name || seen.has(name) || excluded.has(name)) continue;
+      if (name === ASSIGN_ALL_ROWS_NAME) continue;
+      seen.add(name);
+      extras.push(name);
+    }
+  }
+  return extras;
+}
+
+async function ensureWikiHistory(
+  sheet: SheetConfig,
+  indexRows: number
+): Promise<WikiHistoryIndex> {
+  if (hasWikiHistory(sheet.id, indexRows)) {
+    return getWikiHistory(sheet.id)!;
+  }
+  const structure = await ensureStructure(sheet);
+  const rules = rulesFor(sheet, structure);
+  const raw = await fetchWikiHistoryFromSheet(sheet, rules, indexRows);
   const index = aggregateWikiHistory(raw, indexRows);
-  saveWikiHistory(index);
+  saveWikiHistory(sheet.id, index);
   return index;
 }
 
@@ -99,13 +155,18 @@ export async function getWikiHistorySuggestions(
   query: string,
   indexRows: number
 ): Promise<WikiHistorySuggestion[]> {
-  const index = await ensureWikiHistory(indexRows);
-  return suggestWikiHistory(index, name, wiki, query);
+  const indexes: WikiHistoryIndex[] = [];
+  for (const sheet of WORK_SHEETS) {
+    indexes.push(await ensureWikiHistory(sheet, indexRows));
+  }
+  const combined = combineWikiHistories(indexes);
+  return suggestWikiHistory(combined, name, wiki, query);
 }
 
 export async function getBootstrap(): Promise<BootstrapPayload> {
   const oauth = isOAuthConfigured();
   const session = oauth ? await auth() : null;
+  const sheets = WORK_SHEETS.map((s) => ({ id: s.id, label: s.label, name: s.name }));
 
   const authRequiredPayload = (authMessage?: string): BootstrapPayload => ({
     authMode: "oauth",
@@ -113,9 +174,10 @@ export async function getBootstrap(): Promise<BootstrapPayload> {
     authMessage,
     userEmail: session?.user?.email ?? null,
     spreadsheetTitle: SPREADSHEET_DISPLAY_TITLE,
-    sheetName: SHEET_NAME,
+    sheets,
     sheetUrl: workSheetEditUrl(),
     discordNames: [],
+    extraAssignees: [],
     statusOptions: [...WORK_STATUS_OPTIONS],
     defaultIndexRows: DEFAULT_INDEX_ROWS,
     enableWrites: ENABLE_SHEET_WRITES,
@@ -126,30 +188,31 @@ export async function getBootstrap(): Promise<BootstrapPayload> {
   }
 
   try {
-    // アイドル明け（最終アクセスから閾値以上経過）なら全キャッシュをクリアし、
-    // 続く ensureStructure / queue / row / 補完候補をシートから作り直す。
     clearCacheIfIdle();
-    await ensureStructure();
+    for (const sheet of WORK_SHEETS) await ensureStructure(sheet);
     const discordNames = await loadAssignDiscordNames();
-    // 今回のアクセス時刻を記録（次回のアイドル判定の基準）。
-    touchLastAccessAt();
+    // アサインシートに無いが作業シートの Assignee 列に実在する担当名を追加。
+    // シート間で表記が違う担当（例: 「けにち」/「mnmzwkenichi」）でも、
+    // 実在名を選べば該当シートの担当行を拾える。
+    const extraAssignees = await collectExtraAssignees(
+      DEFAULT_INDEX_ROWS,
+      new Set(discordNames)
+    );
+    for (const sheet of WORK_SHEETS) touchLastAccessAt(sheet.id);
     return {
       authMode: oauth ? "oauth" : "service_account",
       authRequired: false,
       userEmail: session?.user?.email ?? null,
       spreadsheetTitle: SPREADSHEET_DISPLAY_TITLE,
-      sheetName: SHEET_NAME,
+      sheets,
       sheetUrl: workSheetEditUrl(),
       discordNames,
+      extraAssignees,
       statusOptions: [...WORK_STATUS_OPTIONS],
       defaultIndexRows: DEFAULT_INDEX_ROWS,
       enableWrites: ENABLE_SHEET_WRITES,
     };
   } catch (e) {
-    // OAuth で資格情報が無効（期限切れ・refresh 失敗）なら、行き止まりのエラーではなく
-    // ログイン画面を出す（LoginPanel）。権限不足（シート未共有・スコープ不足）も
-    // 別アカウントでの再ログインで解決し得るため、専用文言でログイン画面へ誘導する。
-    // それ以外のエラーは従来どおり投げる。
     if (oauth && isCredentialError(e)) {
       return authRequiredPayload();
     }
@@ -160,50 +223,67 @@ export async function getBootstrap(): Promise<BootstrapPayload> {
   }
 }
 
+/** 全シートを通した統合キュー（第一二弾 → 第三弾の順）。 */
 export async function getQueue(
   options: WorkOptions,
   forceRefresh = false
-): Promise<number[]> {
-  touchLastAccessAt();
-  const structure = await ensureStructure();
-  let records =
-    !forceRefresh && hasQueueIndex(options.indexRows) ? loadQueueIndex() : null;
-
-  if (!records) {
-    // forceRefresh 時はシートから status/assignee を取り直す（index 列のみの 1 回の batchGet）。
-    records = await fetchQueueIndex(structure, options.indexRows);
-    saveQueueIndex(records, options.indexRows);
+): Promise<QueueEntry[]> {
+  const result: QueueEntry[] = [];
+  for (const sheet of WORK_SHEETS) {
+    touchLastAccessAt(sheet.id);
+    const records = await ensureQueueIndex(sheet, options.indexRows, forceRefresh);
+    const rows = filterQueueRows(records, options);
+    for (const row of rows) result.push({ sheet: sheet.id, row });
   }
+  return result;
+}
 
-  return filterQueueRows(records, options);
+/** 保存後、キャッシュ済みの index から統合キューを再計算（シート I/O なし）。 */
+function recomputeQueueAfterSave(
+  options: WorkOptions,
+  clientQueue: QueueEntry[]
+): QueueEntry[] {
+  const result: QueueEntry[] = [];
+  for (const sheet of WORK_SHEETS) {
+    if (hasQueueIndex(sheet.id, options.indexRows)) {
+      const rows = filterQueueRows(loadQueueIndex(sheet.id), options);
+      for (const row of rows) result.push({ sheet: sheet.id, row });
+    } else {
+      // index 未構築のシートはクライアントのキューをそのまま残す。
+      for (const e of clientQueue) if (e.sheet === sheet.id) result.push(e);
+    }
+  }
+  return result;
 }
 
 export async function getRow(
+  sheetId: string,
   sheetRowNumber: number,
   options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode" | "showNamedTriplets">
 ): Promise<RowPayload> {
-  touchLastAccessAt();
-  const structure = await ensureStructure();
-  let rowValues = getRowValues(sheetRowNumber);
+  const sheet = getSheetById(sheetId) ?? DEFAULT_SHEET;
+  touchLastAccessAt(sheet.id);
+  const structure = await ensureStructure(sheet);
+  const rules = rulesFor(sheet, structure);
+  let rowValues = getRowValues(sheet.id, sheetRowNumber);
   if (!rowValues) {
-    rowValues = await fetchRowValues(structure, sheetRowNumber);
-    saveRowValues(sheetRowNumber, rowValues);
+    rowValues = await fetchRowValues(sheet, structure, sheetRowNumber);
+    saveRowValues(sheet.id, sheetRowNumber, rowValues);
   }
 
-  const rowByUnique = rowByUniqueFromValues(structure.uniqueHeaders, rowValues);
+  const rowByUnique = rowByUniqueFromValues(rules.uniqueHeaders, rowValues);
   const payload = buildRowPayload(
+    rules,
+    { id: sheet.id, label: sheet.label },
     rowByUnique,
-    structure.rawHeaders,
-    structure.uniqueHeaders,
     sheetRowNumber,
     options
   );
 
   // 自己修復: 開いた行のライブ status をキュー index キャッシュへ反映する。
-  // アプリ外でシートを直接編集して完了にした行も、開けば以降の判定・保存再計算で除外される。
   const statusValue = payload.columns.find((c) => c.isStatus)?.value;
   if (statusValue) {
-    patchQueueIndex(sheetRowNumber, statusValue, "");
+    patchQueueIndex(sheet.id, sheetRowNumber, statusValue, "");
   }
 
   return payload;
@@ -214,38 +294,33 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
     throw new Error("ENABLE_SHEET_WRITES=false のため書き込みできません。");
   }
 
-  const structure = await ensureStructure();
-  const rowPayload = await getRow(payload.sheetRowNumber, payload.options);
+  const sheet = getSheetById(payload.sheet) ?? DEFAULT_SHEET;
+  const structure = await ensureStructure(sheet);
+  const rules = rulesFor(sheet, structure);
+  const rowPayload = await getRow(sheet.id, payload.sheetRowNumber, payload.options);
   const workColNames = rowPayload.columns.map((c) => c.uniqueName);
 
   const fullEditMode = payload.options.fullEditMode === true;
   const updates = collectEditableUpdates(
+    rules,
     payload.edits,
     workColNames,
-    structure.rawHeaders,
-    structure.uniqueHeaders,
     fullEditMode
   );
 
-  const plan = buildWritePlan(
-    payload.sheetRowNumber,
-    structure.rawHeaders,
-    structure.uniqueHeaders,
-    updates,
-    fullEditMode
-  );
+  const plan = buildWritePlan(rules, payload.sheetRowNumber, updates, fullEditMode);
 
   if (!plan.length) {
     throw new Error("書き込み対象セルがありません。");
   }
 
-  await executeWritePlan(plan);
-  patchRowValues(payload.sheetRowNumber, structure.uniqueHeaders, updates);
+  await executeWritePlan(sheet, plan);
+  patchRowValues(sheet.id, payload.sheetRowNumber, rules.uniqueHeaders, updates);
 
-  const updatedValues = getRowValues(payload.sheetRowNumber);
+  const updatedValues = getRowValues(sheet.id, payload.sheetRowNumber);
   if (updatedValues) {
-    const mergedRow = rowByUniqueFromValues(structure.uniqueHeaders, updatedValues);
-    let history = getWikiHistory();
+    const mergedRow = rowByUniqueFromValues(rules.uniqueHeaders, updatedValues);
+    let history = getWikiHistory(sheet.id);
     if (!history || history.indexRows !== payload.options.indexRows) {
       history = {
         indexRows: payload.options.indexRows,
@@ -255,40 +330,44 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
     }
     history = mergeWikiHistoryFromSave(
       history,
+      rules,
       mergedRow,
-      structure.rawHeaders,
-      structure.uniqueHeaders,
       new Set(Object.keys(updates))
     );
-    saveWikiHistory(history);
+    saveWikiHistory(sheet.id, history);
   }
 
   const statusUnique = rowPayload.columns.find((c) => c.isStatus)?.uniqueName;
   if (statusUnique && updates[statusUnique] !== undefined) {
-    patchQueueIndex(payload.sheetRowNumber, updates[statusUnique], "");
+    patchQueueIndex(sheet.id, payload.sheetRowNumber, updates[statusUnique], "");
   }
 
-  // patch 反映後のキャッシュから最新キューを再計算（シート I/O なし）。
-  // 進捗フィルタ有効時は対象外の行が除外されるため、次の行・前の行判定の単一の基準になる。
-  const records = hasQueueIndex(payload.options.indexRows) ? loadQueueIndex() : null;
-  const queueSheetRows = records
-    ? filterQueueRows(records, payload.options)
-    : payload.queueSheetRows;
+  const queue = recomputeQueueAfterSave(payload.options, payload.queue);
 
-  // 現在行より後ろの最初の行（=次の未完了行）。queueSheetRows は行番号昇順。
-  const nextSheetRowNumber =
-    queueSheetRows.find((r) => r > payload.sheetRowNumber) ?? null;
-
-  return {
-    savedCells: plan.length,
-    nextSheetRowNumber,
-    atEnd: nextSheetRowNumber === null,
-    queueSheetRows,
-  };
+  return { savedCells: plan.length, queue };
 }
 
 export async function refreshCache(): Promise<void> {
-  clearCache();
-  const structure = await loadSheetStructure();
-  setStructure(structure);
+  clearAllCaches();
+  for (const sheet of WORK_SHEETS) {
+    const structure = await loadSheetStructure(sheet);
+    setStructure(sheet.id, structure);
+  }
+}
+
+export function cacheStats(): {
+  indexRowsCached: number;
+  dataRowsCached: number;
+  wikiHistoryEntries: number;
+} {
+  let indexRowsCached = 0;
+  let dataRowsCached = 0;
+  let wikiHistoryEntries = 0;
+  for (const sheet of WORK_SHEETS) {
+    const s = storeCacheStats(sheet.id);
+    indexRowsCached += s.indexRowsCached;
+    dataRowsCached += s.dataRowsCached;
+    wikiHistoryEntries += s.wikiHistoryEntries;
+  }
+  return { indexRowsCached, dataRowsCached, wikiHistoryEntries };
 }

@@ -7,25 +7,19 @@ import {
   ASSIGN_ALL_ROWS_SHEET_LABEL,
   ASSIGN_NAME_EXCLUDE,
   ASSIGN_SHEET_NAME,
-  COL_ASSIGNEE,
-  COL_STATUS_WORK,
   DISCORD_NAME_COLUMN,
   isDoneStatus,
-  SHEET_NAME,
   SPREADSHEET_ID,
+  type SheetConfig,
 } from "./config";
 import {
   columnLetter,
   deweyCellHasValue,
   effectiveColCount,
   makeUniqueHeaders,
-  resolveHeaderToUnique,
-  resolveWorkAssigneeUnique,
-  resolveWorkStatusUnique,
 } from "./columns";
-import { WIKI_DEWEY_BY_NAME, WIKI_TRIPLET_RULES } from "./config";
 import { requireGoogleAccessToken } from "./google-session";
-import type { SheetStructure } from "./types";
+import type { SheetRules, SheetStructure } from "./types";
 import type { WikiHistoryRawRow } from "./wiki-history";
 
 let serviceAccountSheets: sheets_v4.Sheets | null = null;
@@ -83,31 +77,28 @@ async function getSheets(): Promise<sheets_v4.Sheets> {
   return serviceAccountSheets;
 }
 
-export async function loadSheetStructure(): Promise<SheetStructure> {
+export async function loadSheetStructure(
+  sheet: SheetConfig
+): Promise<SheetStructure> {
   const sheets = await getSheets();
   const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
   const title = meta.data.properties?.title ?? SPREADSHEET_ID;
 
   const sheetMeta = meta.data.sheets?.find(
-    (s) => s.properties?.title === SHEET_NAME
+    (s) => s.properties?.title === sheet.name
   );
   const colCount = sheetMeta?.properties?.gridProperties?.columnCount ?? 1;
 
   const headerResp = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `'${SHEET_NAME}'!1:1`,
+    range: `'${sheet.name}'!1:1`,
   });
   const rawHeaders = (headerResp.data.values?.[0] ?? []).map((v) =>
     String(v ?? "")
   );
   const uniqueHeaders = makeUniqueHeaders(rawHeaders);
 
-  return {
-    title,
-    rawHeaders,
-    uniqueHeaders,
-    colCount,
-  };
+  return { title, rawHeaders, uniqueHeaders, colCount };
 }
 
 export async function loadAssignDiscordNames(): Promise<string[]> {
@@ -140,28 +131,31 @@ export async function loadAssignDiscordNames(): Promise<string[]> {
 }
 
 export async function fetchQueueIndex(
-  structure: SheetStructure,
+  sheet: SheetConfig,
+  rules: SheetRules,
   indexRows: number
 ): Promise<
   { sheetRowNumber: number; renban: string; status: string; assignee: string }[]
 > {
   const sheets = await getSheets();
-  const { rawHeaders, uniqueHeaders } = structure;
-  const statusUnique =
-    resolveWorkStatusUnique(rawHeaders, uniqueHeaders) ?? COL_STATUS_WORK;
-  const assigneeUnique =
-    resolveWorkAssigneeUnique(rawHeaders, uniqueHeaders) ?? COL_ASSIGNEE;
+  const { uniqueHeaders } = rules;
   const startRow = 2;
   const endRow = indexRows + 1;
 
   const ranges: string[] = [];
   const keys: string[] = [];
-  for (const headerName of ["連番", statusUnique, assigneeUnique]) {
+  const cols: Array<[string, string | null]> = [
+    ["連番", "連番"],
+    ["status", rules.statusUnique],
+    ["assignee", rules.assigneeUnique],
+  ];
+  for (const [key, headerName] of cols) {
+    if (!headerName) continue;
     const idx = uniqueHeaders.indexOf(headerName);
     if (idx < 0) continue;
     const letter = columnLetter(idx + 1);
-    ranges.push(`'${SHEET_NAME}'!${letter}${startRow}:${letter}${endRow}`);
-    keys.push(headerName);
+    ranges.push(`'${sheet.name}'!${letter}${startRow}:${letter}${endRow}`);
+    keys.push(key);
   }
 
   if (!ranges.length) return [];
@@ -189,8 +183,8 @@ export async function fetchQueueIndex(
     records.push({
       sheetRowNumber: startRow + i,
       renban: colData["連番"]?.[i] ?? "",
-      status: colData[statusUnique]?.[i] ?? "",
-      assignee: colData[assigneeUnique]?.[i] ?? "",
+      status: colData["status"]?.[i] ?? "",
+      assignee: colData["assignee"]?.[i] ?? "",
     });
   }
   return records;
@@ -198,13 +192,11 @@ export async function fetchQueueIndex(
 
 /** 正しいwiki / 空欄正解学習用に三つ組列＋deweyID 列を、インデックス行数ぶん一括読取 */
 export async function fetchWikiHistoryFromSheet(
-  structure: SheetStructure,
+  sheet: SheetConfig,
+  rules: SheetRules,
   indexRows: number
 ): Promise<WikiHistoryRawRow[]> {
-  const headerMap = resolveHeaderToUnique(
-    structure.rawHeaders,
-    structure.uniqueHeaders
-  );
+  const { headerMap, uniqueHeaders } = rules;
   const startRow = 2;
   const endRow = indexRows + 1;
   const ranges: string[] = [];
@@ -216,27 +208,27 @@ export async function fetchWikiHistoryFromSheet(
   };
   const tripletRanges: TripletRange[] = [];
 
-  for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
-    const nameUnique = headerMap[nameHeader];
-    const wikiUnique = headerMap[wikiHeader];
-    const okUnique = headerMap[okHeader];
-    if (!nameUnique || !wikiUnique || !okUnique) continue;
+  const pushRange = (unique: string | undefined): number => {
+    if (!unique) return -1;
+    const idx = uniqueHeaders.indexOf(unique);
+    if (idx < 0) return -1;
+    const letter = columnLetter(idx + 1);
+    ranges.push(`'${sheet.name}'!${letter}${startRow}:${letter}${endRow}`);
+    return ranges.length - 1;
+  };
 
-    const pushRange = (unique: string): number => {
-      const idx = structure.uniqueHeaders.indexOf(unique);
-      if (idx < 0) return -1;
-      const letter = columnLetter(idx + 1);
-      ranges.push(`'${SHEET_NAME}'!${letter}${startRow}:${letter}${endRow}`);
-      return ranges.length - 1;
-    };
+  for (const t of rules.triplets) {
+    const nameUnique = headerMap[t.name];
+    const wikiUnique = headerMap[t.wiki];
+    const okUnique = headerMap[t.ok];
+    if (!nameUnique || !wikiUnique || !okUnique) continue;
 
     const nameIdx = pushRange(nameUnique);
     const wikiIdx = pushRange(wikiUnique);
     const okIdx = pushRange(okUnique);
     if (nameIdx < 0 || wikiIdx < 0 || okIdx < 0) continue;
 
-    const deweyHeader = WIKI_DEWEY_BY_NAME[nameHeader];
-    const deweyUnique = deweyHeader ? headerMap[deweyHeader] : undefined;
+    const deweyUnique = t.dewey ? headerMap[t.dewey] : undefined;
     const deweyIdx = deweyUnique ? pushRange(deweyUnique) : null;
 
     tripletRanges.push({ nameIdx, wikiIdx, okIdx, deweyIdx });
@@ -246,22 +238,18 @@ export async function fetchWikiHistoryFromSheet(
 
   const sheets = await getSheets();
 
-  // 「完了行で正しいWiki空欄 = WikiURL正しい」の判定用に作業 Status 列も読む。
-  const statusUnique =
-    resolveWorkStatusUnique(structure.rawHeaders, structure.uniqueHeaders) ??
-    null;
+  // 「完了行で正しいWiki空欄 = Wiki欄変更不要」の判定用に作業 Status 列も読む。
   let statusRangeIndex = -1;
-  if (statusUnique) {
-    const sIdx = structure.uniqueHeaders.indexOf(statusUnique);
+  if (rules.statusUnique) {
+    const sIdx = uniqueHeaders.indexOf(rules.statusUnique);
     if (sIdx >= 0) {
       const letter = columnLetter(sIdx + 1);
       statusRangeIndex = ranges.length;
-      ranges.push(`'${SHEET_NAME}'!${letter}${startRow}:${letter}${endRow}`);
+      ranges.push(`'${sheet.name}'!${letter}${startRow}:${letter}${endRow}`);
     }
   }
 
-  // レンジ数 × 行数が大きい（例: 29三つ組×4列×30000行 ≒ 117レンジ・350万セル）と
-  // 単一 batchGet が応答過大・タイムアウトで 500 になり、候補が作れなくなる。
+  // レンジ数 × 行数が大きいと単一 batchGet が応答過大・タイムアウトで 500 になるため、
   // レンジを分割して複数回 batchGet し、元の順序で valueRanges を結合する。
   const BATCH_RANGE_CHUNK = 20;
   const valueRanges: sheets_v4.Schema$ValueRange[] = [];
@@ -277,8 +265,7 @@ export async function fetchWikiHistoryFromSheet(
   const colAt = (idx: number): string[] =>
     (valueRanges[idx]?.values ?? []).map((row) => String(row[0] ?? "").trim());
 
-  const statusCol =
-    statusRangeIndex >= 0 ? colAt(statusRangeIndex) : [];
+  const statusCol = statusRangeIndex >= 0 ? colAt(statusRangeIndex) : [];
 
   const results: WikiHistoryRawRow[] = [];
 
@@ -301,7 +288,6 @@ export async function fetchWikiHistoryFromSheet(
       if (!name || !wiki) continue;
       const done = isDoneStatus(statusCol[i] ?? "");
       const deweyHasValue = deweyCellHasValue(deweyCol[i] ?? "");
-      // 正しいWiki が値ありの行、または完了行（空欄正解判定用）だけ残す。
       if (correctWiki === "" && !done) continue;
       results.push({ name, wiki, correctWiki, done, deweyHasValue });
     }
@@ -311,6 +297,7 @@ export async function fetchWikiHistoryFromSheet(
 }
 
 export async function fetchRowValues(
+  sheet: SheetConfig,
   structure: SheetStructure,
   sheetRowNumber: number
 ): Promise<string[]> {
@@ -319,12 +306,13 @@ export async function fetchRowValues(
   const endCol = columnLetter(readCount);
   const resp = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `'${SHEET_NAME}'!A${sheetRowNumber}:${endCol}${sheetRowNumber}`,
+    range: `'${sheet.name}'!A${sheetRowNumber}:${endCol}${sheetRowNumber}`,
   });
   return (resp.data.values?.[0] ?? []).map((v) => String(v ?? ""));
 }
 
 export async function executeWritePlan(
+  sheet: SheetConfig,
   plan: { cell: string; value: string }[]
 ): Promise<void> {
   if (!plan.length) return;
@@ -334,7 +322,7 @@ export async function executeWritePlan(
     requestBody: {
       valueInputOption: "USER_ENTERED",
       data: plan.map((item) => ({
-        range: `'${SHEET_NAME}'!${item.cell}`,
+        range: `'${sheet.name}'!${item.cell}`,
         values: [[item.value]],
       })),
     },

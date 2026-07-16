@@ -1,59 +1,16 @@
 import {
   ASSIGN_ALL_ROWS_NAME,
-  COL_ASSIGNEE,
-  COL_STATUS_WORK,
-  FULL_EDIT_COLUMN_RANGES,
-  FULL_EDIT_DISPLAY_RANGE,
-  FULL_EDIT_HIDDEN_RANGES,
   LEADING_FIXED_HEADERS,
-  LIGHT_BLUE_WORK_HEADERS,
-  MEMO_SECTION_BY_HEADER,
-  MEMO_WORK_HEADERS,
   isDoneStatus,
   STATUS_NOT_STARTED,
-  WIKI_DEWEY_BY_NAME,
-  WIKI_TRIPLET_RULES,
-  WORK_STATUS_COL_LETTER,
-  WORK_ASSIGNEE_COL_LETTER,
   WORK_STATUS_OPTIONS,
   WORK_TABLE_START_HEADER,
   WRITE_DENYLIST_COL_LETTERS,
 } from "./config";
 
-import type { ColumnPayload, WorkOptions } from "./types";
+import type { ColumnPayload, SheetRules, WorkOptions } from "./types";
 
 const LEADING = LEADING_FIXED_HEADERS;
-const WIKI_NAME_HEADERS = new Set(WIKI_TRIPLET_RULES.map(([name]) => name));
-
-const FULL_EDIT_DISPLAY_BOUNDS: [number, number] = [
-  columnIndexFromLetter(FULL_EDIT_DISPLAY_RANGE[0]),
-  columnIndexFromLetter(FULL_EDIT_DISPLAY_RANGE[1]),
-];
-const FULL_EDIT_BOUNDS: [number, number][] = FULL_EDIT_COLUMN_RANGES.map(
-  ([from, to]) => [columnIndexFromLetter(from), columnIndexFromLetter(to)]
-);
-const FULL_EDIT_HIDDEN_BOUNDS: [number, number][] = FULL_EDIT_HIDDEN_RANGES.map(
-  ([from, to]) => [columnIndexFromLetter(from), columnIndexFromLetter(to)]
-);
-
-/** 全列表示モードで明示的に非表示とする列か */
-export function isFullHiddenColIndex(colIndex: number): boolean {
-  return FULL_EDIT_HIDDEN_BOUNDS.some(([a, b]) => colIndex >= a && colIndex <= b);
-}
-
-/** 全列表示モードで表示対象とする列か（AN〜GU、ただし除外範囲を除く） */
-export function isFullDisplayColIndex(colIndex: number): boolean {
-  return (
-    colIndex >= FULL_EDIT_DISPLAY_BOUNDS[0] &&
-    colIndex <= FULL_EDIT_DISPLAY_BOUNDS[1] &&
-    !isFullHiddenColIndex(colIndex)
-  );
-}
-
-/** 全列編集モードで自由入力編集を許可する列か（AN〜GI, GM〜GU） */
-export function isFullEditableColIndex(colIndex: number): boolean {
-  return FULL_EDIT_BOUNDS.some(([a, b]) => colIndex >= a && colIndex <= b);
-}
 
 export function columnLetter(colIndex: number): string {
   let letter = "";
@@ -107,66 +64,73 @@ export function hasDisplayWikiValue(value: unknown): boolean {
 }
 
 export function isMemoWorkColumn(rawHeader: string): boolean {
-  return (
-    (MEMO_WORK_HEADERS as readonly string[]).includes(rawHeader) ||
-    rawHeader.endsWith("_memo")
-  );
+  return rawHeader.endsWith("_memo");
 }
 
-export function isWorkStatusColumn(rawHeader: string, colIndex: number): boolean {
-  return columnLetter(colIndex) === WORK_STATUS_COL_LETTER && rawHeader === "Status";
+/** memo 列のセクション名（Agent_memo → Agent）。 */
+function memoSectionOf(rawHeader: string): string {
+  return rawHeader.replace(/_memo$/, "");
 }
 
 export function isCorrectWikiHeader(rawHeader: string): boolean {
   return rawHeader.includes("正しいwiki");
 }
 
-/** Wiki 三つ組の名称列（A_name1, Pl_name1 等） */
-export function isWikiNameHeader(rawHeader: string): boolean {
-  return WIKI_NAME_HEADERS.has(rawHeader);
+/** Wiki 三つ組の名称列（A_name1, Pl_1, Pl_name5 等） */
+export function isWikiNameHeader(rawHeader: string, rules: SheetRules): boolean {
+  return rules.wikiNameHeaders.has(rawHeader);
 }
 
-export function isLightBlueWorkColumn(rawHeader: string, colIndex: number): boolean {
-  const letter = columnLetter(colIndex);
-  if (letter === WORK_STATUS_COL_LETTER && rawHeader === "Status") return true;
-  if (letter === WORK_ASSIGNEE_COL_LETTER && rawHeader === COL_ASSIGNEE) return true;
-  return LIGHT_BLUE_WORK_HEADERS.has(rawHeader);
+/** 作業 Status 列（uniqueName で判定） */
+export function isStatusUnique(uniqueName: string, rules: SheetRules): boolean {
+  return rules.statusUnique != null && uniqueName === rules.statusUnique;
+}
+
+/** 担当 Assignee 列（uniqueName で判定） */
+export function isAssigneeUnique(uniqueName: string, rules: SheetRules): boolean {
+  return rules.assigneeUnique != null && uniqueName === rules.assigneeUnique;
+}
+
+/** 作業対象（水色）列か（名称/Wiki/正しいwiki/memo/Status/Assignee） */
+export function isLightBlueWorkColumn(
+  uniqueName: string,
+  rules: SheetRules
+): boolean {
+  return rules.lightBlueUnique.has(uniqueName);
 }
 
 export function isWritableColumn(
-  rawHeader: string,
+  rules: SheetRules,
+  uniqueName: string,
   colIndex: number,
   fullEditMode = false
 ): boolean {
   const letter = columnLetter(colIndex);
   if (WRITE_DENYLIST_COL_LETTERS.has(letter)) return false;
-  if (isWorkStatusColumn(rawHeader, colIndex)) return true;
-  if (fullEditMode && isFullEditableColIndex(colIndex)) return true;
-  return LIGHT_BLUE_WORK_HEADERS.has(rawHeader) || rawHeader === COL_ASSIGNEE;
+  if (isStatusUnique(uniqueName, rules)) return true;
+  if (fullEditMode && rules.fullEditableIdx.has(colIndex - 1)) return true;
+  return rules.lightBlueUnique.has(uniqueName);
 }
 
 export function isInlineEditableColumn(
+  rules: SheetRules,
   uniqueName: string,
   rawHeader: string,
   colIndex: number,
   fullEditMode = false
 ): boolean {
-  if (isWorkStatusColumn(rawHeader, colIndex)) return true;
+  if (isStatusUnique(uniqueName, rules)) return true;
   if (isMemoWorkColumn(rawHeader) || isCorrectWikiHeader(rawHeader)) {
-    return isWritableColumn(rawHeader, colIndex, fullEditMode);
+    return isWritableColumn(rules, uniqueName, colIndex, fullEditMode);
   }
   if (
     fullEditMode &&
-    isFullEditableColIndex(colIndex) &&
-    isWritableColumn(rawHeader, colIndex, fullEditMode)
+    rules.fullEditableIdx.has(colIndex - 1) &&
+    isWritableColumn(rules, uniqueName, colIndex, fullEditMode)
   ) {
     return true;
   }
   return false;
-}
-
-export function isWikiStyleHeader(header: string): boolean {
-  return LIGHT_BLUE_WORK_HEADERS.has(header);
 }
 
 export function makeUniqueHeaders(headers: string[]): string[] {
@@ -199,16 +163,14 @@ export function resolveHeaderToUnique(
 
 /** 正しいwiki 列に対応する name / wiki の現在値 */
 export function tripletValuesForOkHeader(
+  rules: SheetRules,
   okRawHeader: string,
-  rowByUnique: Record<string, string>,
-  rawHeaders: string[],
-  uniqueHeaders: string[]
+  rowByUnique: Record<string, string>
 ): { name: string; wiki: string } | null {
-  const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
-  for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
-    if (okHeader !== okRawHeader) continue;
-    const nameUnique = headerMap[nameHeader];
-    const wikiUnique = headerMap[wikiHeader];
+  for (const t of rules.triplets) {
+    if (t.ok !== okRawHeader) continue;
+    const nameUnique = rules.headerMap[t.name];
+    const wikiUnique = rules.headerMap[t.wiki];
     if (!nameUnique || !wikiUnique) return null;
     return {
       name: String(rowByUnique[nameUnique] ?? "").trim(),
@@ -220,50 +182,37 @@ export function tripletValuesForOkHeader(
 
 /** 正しいwiki 列に対応する三つ組の deweyID 有無 */
 export function tripletDeweyHasValueForOkHeader(
+  rules: SheetRules,
   okRawHeader: string,
-  rowByUnique: Record<string, string>,
-  rawHeaders: string[],
-  uniqueHeaders: string[]
+  rowByUnique: Record<string, string>
 ): boolean {
-  const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
-  for (const [nameHeader, , okHeader] of WIKI_TRIPLET_RULES) {
-    if (okHeader !== okRawHeader) continue;
-    return tripletDeweyHasValue(nameHeader, rowByUnique, headerMap);
+  for (const t of rules.triplets) {
+    if (t.ok !== okRawHeader) continue;
+    return tripletDeweyHasValue(rules, t.name, rowByUnique);
   }
   return false;
 }
 
-export function sectionForWorkRawHeader(rawHeader: string): string | null {
-  if (rawHeader.startsWith("Pl_")) return "Place";
-  if (rawHeader.startsWith("P-T_")) return "Patient-Theme";
-  if (rawHeader.startsWith("Te_")) return "Territory";
-  if (
-    rawHeader.startsWith("A_name") ||
-    rawHeader.startsWith("A_Wiki") ||
-    rawHeader.startsWith("A_正しいwiki") ||
-    rawHeader === "A_6" ||
-    rawHeader === "A_7" ||
-    rawHeader === "A_8"
-  ) {
-    return "Agent";
-  }
-  return null;
+export function sectionForWorkRawHeader(
+  rawHeader: string,
+  rules: SheetRules
+): string | null {
+  return rules.sectionByHeader[rawHeader] ?? null;
 }
 
 export function activeWorkSections(
   workCols: string[],
-  rawHeaders: string[],
-  uniqueHeaders: string[]
+  rules: SheetRules
 ): Set<string> {
   const headerByUnique: Record<string, string> = {};
-  for (let i = 0; i < uniqueHeaders.length; i++) {
-    headerByUnique[uniqueHeaders[i]] = rawHeaders[i];
+  for (let i = 0; i < rules.uniqueHeaders.length; i++) {
+    headerByUnique[rules.uniqueHeaders[i]] = rules.rawHeaders[i];
   }
   const sections = new Set<string>();
   for (const colName of workCols) {
     const rawHeader = headerByUnique[colName] ?? colName;
     if (isMemoWorkColumn(rawHeader)) continue;
-    const section = sectionForWorkRawHeader(rawHeader);
+    const section = sectionForWorkRawHeader(rawHeader, rules);
     if (section) sections.add(section);
   }
   return sections;
@@ -273,77 +222,29 @@ export function shouldShowMemoColumn(
   rawHeader: string,
   activeSections: Set<string>
 ): boolean {
-  const section = MEMO_SECTION_BY_HEADER[rawHeader];
-  if (!section) return false;
-  return activeSections.has(section);
+  if (!isMemoWorkColumn(rawHeader)) return false;
+  return activeSections.has(memoSectionOf(rawHeader));
 }
 
-export function resolveWorkStatusUnique(
-  rawHeaders: string[],
+/** 読み取るべき最大列数（ヘッダー幅を必ずカバー）。 */
+export function effectiveColCount(
+  colCount: number,
   uniqueHeaders: string[]
-): string | null {
-  // 作業 Status = Assignee 列の直前にある "Status"（隣接ベース）。
-  // これにより、シート前方にある別の "Status"（エンティティ Status＝AE 等）を誤検出せず、
-  // 列の増減（deweyID 挿入等）で位置がずれても追従する。
-  for (let i = 1; i < rawHeaders.length; i++) {
-    if (rawHeaders[i] === COL_ASSIGNEE && rawHeaders[i - 1] === "Status") {
-      return uniqueHeaders[i - 1];
-    }
-  }
-  // フォールバック: 既定レター位置の "Status"。
-  for (let i = 0; i < rawHeaders.length; i++) {
-    if (isWorkStatusColumn(rawHeaders[i], i + 1)) {
-      return uniqueHeaders[i];
-    }
-  }
-  return uniqueHeaders.includes(COL_STATUS_WORK) ? COL_STATUS_WORK : null;
-}
-
-/** 作業 Assignee 列（名前で特定。通常シート上に1つ） */
-export function resolveWorkAssigneeUnique(
-  rawHeaders: string[],
-  uniqueHeaders: string[]
-): string | null {
-  for (let i = 0; i < rawHeaders.length; i++) {
-    if (rawHeaders[i] === COL_ASSIGNEE) {
-      return uniqueHeaders[i];
-    }
-  }
-  return uniqueHeaders.includes(COL_ASSIGNEE) ? COL_ASSIGNEE : null;
-}
-
-export function effectiveColCount(colCount: number, uniqueHeaders: string[]): number {
-  let maxIndex = colCount;
-  for (const letter of [WORK_STATUS_COL_LETTER, WORK_ASSIGNEE_COL_LETTER]) {
-    const idx = columnIndexFromLetter(letter);
-    if (idx > maxIndex) maxIndex = idx;
-  }
-  return Math.max(colCount, maxIndex, uniqueHeaders.length);
-}
-
-function findWikiTripletByRawHeader(
-  rawHeader: string
-): [string, string, string] | null {
-  for (const rule of WIKI_TRIPLET_RULES) {
-    if (rule.includes(rawHeader)) return rule;
-  }
-  return null;
+): number {
+  return Math.max(colCount, uniqueHeaders.length);
 }
 
 /** Wiki 三つ組の表示状態（作業表の列抽出用） */
-export type WikiTripletDisplayState =
-  | "empty_name"
-  | "wiki_dash"
-  | "active";
+export type WikiTripletDisplayState = "empty_name" | "wiki_dash" | "active";
 
 export function wikiTripletDisplayState(
+  rules: SheetRules,
   nameHeader: string,
   wikiHeader: string,
-  rowByUnique: Record<string, string>,
-  headerMap: Record<string, string>
+  rowByUnique: Record<string, string>
 ): WikiTripletDisplayState {
-  const nameUnique = headerMap[nameHeader];
-  const wikiUnique = headerMap[wikiHeader];
+  const nameUnique = rules.headerMap[nameHeader];
+  const wikiUnique = rules.headerMap[wikiHeader];
   if (!nameUnique || !(nameUnique in rowByUnique)) return "empty_name";
   if (!nameCellHasValue(rowByUnique[nameUnique])) return "empty_name";
   if (
@@ -366,16 +267,35 @@ export function deweyCellHasValue(value: unknown): boolean {
  * 「deweyID有りを除く」モードの判定にのみ使用（deweyID 列自体は表示しない）。
  */
 export function tripletDeweyHasValue(
+  rules: SheetRules,
   nameHeader: string,
-  rowByUnique: Record<string, string>,
-  headerMap: Record<string, string>
+  rowByUnique: Record<string, string>
 ): boolean {
-  const deweyHeader = WIKI_DEWEY_BY_NAME[nameHeader];
+  const deweyHeader = rules.deweyByName[nameHeader];
   if (!deweyHeader) return false;
-  const unique = headerMap[deweyHeader];
+  const unique = rules.headerMap[deweyHeader];
   if (!unique || !(unique in rowByUnique)) return false;
-  const v = String(rowByUnique[unique] ?? "").trim();
-  return deweyCellHasValue(v);
+  return deweyCellHasValue(rowByUnique[unique]);
+}
+
+function findWikiTripletByRawHeader(rawHeader: string, rules: SheetRules) {
+  for (const t of rules.triplets) {
+    if (t.name === rawHeader || t.wiki === rawHeader || t.ok === rawHeader) {
+      return t;
+    }
+  }
+  return null;
+}
+
+export function rowByUniqueFromValues(
+  uniqueHeaders: string[],
+  rowValues: string[]
+): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (let i = 0; i < uniqueHeaders.length; i++) {
+    map[uniqueHeaders[i]] = i < rowValues.length ? rowValues[i] : "";
+  }
+  return map;
 }
 
 /**
@@ -383,83 +303,68 @@ export function tripletDeweyHasValue(
  * - 水色列のみ は options.lightBlueOnly で制御
  * - 空セルの列は非表示
  * - Wiki 三つ組（名称/Wiki/正しいwiki）は常に3列セットで表示/非表示
- *   - Entity値有り: 名称に値あり → セット表示
- *   - deweyID有りを除く: 名称に値あり かつ deweyID 無（空/`-`）のみ表示（ID 有＝判断不要として除外）
  */
 export function shouldIncludeWorkColumn(
+  rules: SheetRules,
   rawHeader: string,
   uniqueName: string,
   rowByUnique: Record<string, string>,
-  headerMap: Record<string, string>,
-  colIndex: number,
   options: Pick<WorkOptions, "lightBlueOnly" | "showNamedTriplets">
 ): boolean {
   const showNamedTriplets = options.showNamedTriplets === true;
-  // 名称表示モードも「作業対象列（水色）」が基準。
   const lightBlueOnly = showNamedTriplets || options.lightBlueOnly !== false;
 
-  if (lightBlueOnly && !isLightBlueWorkColumn(rawHeader, colIndex)) return false;
+  if (lightBlueOnly && !isLightBlueWorkColumn(uniqueName, rules)) return false;
   if (isMemoWorkColumn(rawHeader)) return false;
 
-  const triplet = findWikiTripletByRawHeader(rawHeader);
+  const triplet = findWikiTripletByRawHeader(rawHeader, rules);
   if (triplet) {
-    const [nameHeader, wikiHeader] = triplet;
     const state = wikiTripletDisplayState(
-      nameHeader,
-      wikiHeader,
-      rowByUnique,
-      headerMap
+      rules,
+      triplet.name,
+      triplet.wiki,
+      rowByUnique
     );
     if (state === "empty_name") return false;
-    // Entity値有り: 名称に値あり → Wiki「-」含めセット表示。
     if (showNamedTriplets) return true;
-    // deweyID有りを除く: 名称有 かつ deweyID 無（空/`-`）のみセット表示。
-    return !tripletDeweyHasValue(nameHeader, rowByUnique, headerMap);
+    return !tripletDeweyHasValue(rules, triplet.name, rowByUnique);
   }
 
   return !isCellEmpty(rowByUnique[uniqueName]);
 }
 
 function expandWikiTripletColumns(
+  rules: SheetRules,
   rowByUnique: Record<string, string>,
-  rawHeaders: string[],
-  uniqueHeaders: string[],
   cols: string[],
   lightBlueOnly: boolean,
   showNamedTriplets = false
 ): string[] {
-  const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
+  const { headerMap, uniqueHeaders } = rules;
   const colSet = new Set(cols);
 
-  for (const [nameHeader, , okHeader] of WIKI_TRIPLET_RULES) {
-    const nameUnique = headerMap[nameHeader];
+  for (const t of rules.triplets) {
+    const nameUnique = headerMap[t.name];
     if (!nameUnique || !(nameUnique in rowByUnique)) continue;
     if (!nameCellHasValue(rowByUnique[nameUnique])) continue;
-    // 可視セット: Entity値有り=名称有 / deweyID有りを除く=名称有 かつ deweyID 無。
     const visible =
-      showNamedTriplets ||
-      !tripletDeweyHasValue(nameHeader, rowByUnique, headerMap);
+      showNamedTriplets || !tripletDeweyHasValue(rules, t.name, rowByUnique);
     if (!visible) continue;
-    if (!rawHeaders.includes(okHeader)) continue;
-    if (
-      lightBlueOnly &&
-      !isLightBlueWorkColumn(okHeader, rawHeaders.indexOf(okHeader) + 1)
-    ) {
-      continue;
-    }
-    const okUnique = headerMap[okHeader];
-    if (okUnique && okUnique in rowByUnique) colSet.add(okUnique);
+    const okUnique = headerMap[t.ok];
+    if (!okUnique) continue;
+    if (lightBlueOnly && !isLightBlueWorkColumn(okUnique, rules)) continue;
+    if (okUnique in rowByUnique) colSet.add(okUnique);
   }
 
   // 「deweyID有りを除く」モードでは deweyID 有りの三つ組をセットごと除外する。
   if (!showNamedTriplets) {
-    for (const [nameHeader, wikiHeader, okHeader] of WIKI_TRIPLET_RULES) {
-      const nameUnique = headerMap[nameHeader];
-      const wikiUnique = headerMap[wikiHeader];
-      const okUnique = headerMap[okHeader];
+    for (const t of rules.triplets) {
+      const nameUnique = headerMap[t.name];
+      const wikiUnique = headerMap[t.wiki];
+      const okUnique = headerMap[t.ok];
       if (!nameUnique || !(nameUnique in rowByUnique)) continue;
       if (!nameCellHasValue(rowByUnique[nameUnique])) continue;
-      if (!tripletDeweyHasValue(nameHeader, rowByUnique, headerMap)) continue;
+      if (!tripletDeweyHasValue(rules, t.name, rowByUnique)) continue;
       colSet.delete(nameUnique);
       if (wikiUnique) colSet.delete(wikiUnique);
       if (okUnique) colSet.delete(okUnique);
@@ -486,12 +391,11 @@ export function isAllColsMode(
 }
 
 export function workDisplayColumns(
+  rules: SheetRules,
   rowByUnique: Record<string, string>,
-  rawHeaders: string[],
-  uniqueHeaders: string[],
   options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode" | "showNamedTriplets">
 ): string[] {
-  const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
+  const { headerMap, rawHeaders, uniqueHeaders } = rules;
   const cols: string[] = [];
 
   for (const header of LEADING) {
@@ -503,7 +407,7 @@ export function workDisplayColumns(
     for (let i = 0; i < uniqueHeaders.length; i++) {
       const uniqueName = uniqueHeaders[i];
       if (!(uniqueName in rowByUnique) || cols.includes(uniqueName)) continue;
-      if (!isFullDisplayColIndex(i + 1)) continue;
+      if (!rules.fullDisplayIdx.has(i)) continue;
       cols.push(uniqueName);
     }
     return cols;
@@ -512,7 +416,7 @@ export function workDisplayColumns(
   let startIndex = rawHeaders.indexOf(WORK_TABLE_START_HEADER);
   if (startIndex < 0) startIndex = rawHeaders.length;
 
-  // 全列表示（Entity値有り OFF）: AC 以降の全列をフィルタなしで表示（空列・三つ組も全部）。
+  // 全列表示（Entity値有り OFF）: AC 以降の全列をフィルタなしで表示。
   if (isAllColsMode(options)) {
     for (let i = startIndex; i < uniqueHeaders.length; i++) {
       const uniqueName = uniqueHeaders[i];
@@ -527,14 +431,7 @@ export function workDisplayColumns(
     const rawHeader = rawHeaders[i];
     if (!(uniqueName in rowByUnique) || cols.includes(uniqueName)) continue;
     if (
-      !shouldIncludeWorkColumn(
-        rawHeader,
-        uniqueName,
-        rowByUnique,
-        headerMap,
-        i + 1,
-        options
-      )
+      !shouldIncludeWorkColumn(rules, rawHeader, uniqueName, rowByUnique, options)
     ) {
       continue;
     }
@@ -542,9 +439,8 @@ export function workDisplayColumns(
   }
 
   return expandWikiTripletColumns(
+    rules,
     rowByUnique,
-    rawHeaders,
-    uniqueHeaders,
     cols,
     options.lightBlueOnly !== false || options.showNamedTriplets === true,
     options.showNamedTriplets === true
@@ -552,10 +448,10 @@ export function workDisplayColumns(
 }
 
 export function filterMemoDisplayColumns(
-  workCols: string[],
-  rawHeaders: string[],
-  uniqueHeaders: string[]
+  rules: SheetRules,
+  workCols: string[]
 ): string[] {
+  const { rawHeaders, uniqueHeaders } = rules;
   const headerByUnique: Record<string, string> = {};
   for (let i = 0; i < uniqueHeaders.length; i++) {
     headerByUnique[uniqueHeaders[i]] = rawHeaders[i];
@@ -563,7 +459,7 @@ export function filterMemoDisplayColumns(
   const nonMemo = workCols.filter(
     (col) => !isMemoWorkColumn(headerByUnique[col] ?? col)
   );
-  const active = activeWorkSections(nonMemo, rawHeaders, uniqueHeaders);
+  const active = activeWorkSections(nonMemo, rules);
   const filteredSet = new Set(nonMemo);
   for (let j = 0; j < rawHeaders.length; j++) {
     const rawHeader = rawHeaders[j];
@@ -576,15 +472,13 @@ export function filterMemoDisplayColumns(
 }
 
 export function ensureWorkDisplayCols(
-  workCols: string[],
-  rawHeaders: string[],
-  uniqueHeaders: string[]
+  rules: SheetRules,
+  workCols: string[]
 ): string[] {
   const colSet = new Set(workCols);
-  const statusUnique = resolveWorkStatusUnique(rawHeaders, uniqueHeaders);
-  if (statusUnique) colSet.add(statusUnique);
-  const ordered = uniqueHeaders.filter((name) => colSet.has(name));
-  return filterMemoDisplayColumns(ordered, rawHeaders, uniqueHeaders);
+  if (rules.statusUnique) colSet.add(rules.statusUnique);
+  const ordered = rules.uniqueHeaders.filter((name) => colSet.has(name));
+  return filterMemoDisplayColumns(rules, ordered);
 }
 
 export function rowSummary(
@@ -601,12 +495,12 @@ export function rowSummary(
 }
 
 export function buildColumnPayload(
+  rules: SheetRules,
   rowByUnique: Record<string, string>,
   workCols: string[],
-  rawHeaders: string[],
-  uniqueHeaders: string[],
   fullEditMode = false
 ): ColumnPayload[] {
+  const { rawHeaders, uniqueHeaders } = rules;
   const headerByUnique: Record<string, string> = {};
   for (let i = 0; i < uniqueHeaders.length; i++) {
     headerByUnique[uniqueHeaders[i]] = rawHeaders[i];
@@ -617,25 +511,22 @@ export function buildColumnPayload(
     const rawHeader = headerByUnique[uniqueName] ?? uniqueName;
     const value = rowByUnique[uniqueName];
     let inline = isInlineEditableColumn(
+      rules,
       uniqueName,
       rawHeader,
       colIndex,
       fullEditMode
     );
-    const isStatus = isWorkStatusColumn(rawHeader, colIndex);
+    const isStatus = isStatusUnique(uniqueName, rules);
+    const isAssignee = isAssigneeUnique(uniqueName, rules);
     let editValue = isCellEmpty(value) ? "" : String(value);
     if (isStatus) editValue = normalizeWorkStatus(value);
     const triplet = isCorrectWikiHeader(rawHeader)
-      ? tripletValuesForOkHeader(rawHeader, rowByUnique, rawHeaders, uniqueHeaders)
+      ? tripletValuesForOkHeader(rules, rawHeader, rowByUnique)
       : null;
     const tripletDewey =
       isCorrectWikiHeader(rawHeader) &&
-      tripletDeweyHasValueForOkHeader(
-        rawHeader,
-        rowByUnique,
-        rawHeaders,
-        uniqueHeaders
-      );
+      tripletDeweyHasValueForOkHeader(rules, rawHeader, rowByUnique);
     if (isCorrectWikiHeader(rawHeader) && tripletDewey) {
       inline = false;
     }
@@ -646,6 +537,12 @@ export function buildColumnPayload(
           ? "—"
           : String(value).trim();
 
+    const isWiki =
+      rules.lightBlueUnique.has(uniqueName) &&
+      !isStatus &&
+      !isAssignee &&
+      !isMemoWorkColumn(rawHeader);
+
     return {
       uniqueName,
       rawHeader,
@@ -654,10 +551,11 @@ export function buildColumnPayload(
       value: editValue,
       inline,
       isStatus,
+      isAssignee,
       isMemo: isMemoWorkColumn(rawHeader),
-      isWiki: isWikiStyleHeader(rawHeader) && !isMemoWorkColumn(rawHeader),
+      isWiki,
       isWikiEdit: isCorrectWikiHeader(rawHeader),
-      isWikiName: isWikiNameHeader(rawHeader),
+      isWikiName: isWikiNameHeader(rawHeader, rules),
       isLeading: (LEADING as readonly string[]).includes(rawHeader),
       tripletName: triplet?.name ?? "",
       tripletWiki: triplet?.wiki ?? "",
@@ -667,18 +565,17 @@ export function buildColumnPayload(
 }
 
 export function buildWritePlan(
+  rules: SheetRules,
   sheetRowNumber: number,
-  rawHeaders: string[],
-  uniqueHeaders: string[],
   updates: Record<string, string>,
   fullEditMode = false
 ): { cell: string; value: string }[] {
+  const { uniqueHeaders } = rules;
   const plan: { cell: string; value: string }[] = [];
   for (const [uniqueName, value] of Object.entries(updates)) {
     const colIndex = uniqueHeaders.indexOf(uniqueName);
     if (colIndex < 0) continue;
-    const rawHeader = rawHeaders[colIndex];
-    if (!isWritableColumn(rawHeader, colIndex + 1, fullEditMode)) continue;
+    if (!isWritableColumn(rules, uniqueName, colIndex + 1, fullEditMode)) continue;
     const letter = columnLetter(colIndex + 1);
     plan.push({ cell: `${letter}${sheetRowNumber}`, value });
   }
@@ -686,12 +583,12 @@ export function buildWritePlan(
 }
 
 export function collectEditableUpdates(
+  rules: SheetRules,
   edits: Record<string, string>,
   workCols: string[],
-  rawHeaders: string[],
-  uniqueHeaders: string[],
   fullEditMode = false
 ): Record<string, string> {
+  const { rawHeaders, uniqueHeaders } = rules;
   const headerByUnique: Record<string, string> = {};
   for (let i = 0; i < uniqueHeaders.length; i++) {
     headerByUnique[uniqueHeaders[i]] = rawHeaders[i];
@@ -701,7 +598,9 @@ export function collectEditableUpdates(
     if (!(uniqueName in edits)) continue;
     const colIndex = uniqueHeaders.indexOf(uniqueName) + 1;
     const rawHeader = headerByUnique[uniqueName];
-    if (!isInlineEditableColumn(uniqueName, rawHeader, colIndex, fullEditMode)) {
+    if (
+      !isInlineEditableColumn(rules, uniqueName, rawHeader, colIndex, fullEditMode)
+    ) {
       continue;
     }
     updates[uniqueName] = edits[uniqueName];
@@ -709,25 +608,18 @@ export function collectEditableUpdates(
   return updates;
 }
 
-export function rowByUniqueFromValues(
-  uniqueHeaders: string[],
-  rowValues: string[]
-): Record<string, string> {
-  const map: Record<string, string> = {};
-  for (let i = 0; i < uniqueHeaders.length; i++) {
-    map[uniqueHeaders[i]] = i < rowValues.length ? rowValues[i] : "";
-  }
-  return map;
-}
-
 export function filterQueueRows(
-  rows: { sheetRowNumber: number; renban: string; status: string; assignee: string }[],
+  rows: {
+    sheetRowNumber: number;
+    renban: string;
+    status: string;
+    assignee: string;
+  }[],
   options: WorkOptions
 ): number[] {
   const worker = options.worker.trim();
   let filtered = rows;
 
-  // 進捗フィルタ: incomplete=完了系を除外 / notStarted=未着手（空欄含む）のみ。
   if (options.statusFilter === "incomplete") {
     filtered = filtered.filter((r) => !isDoneStatus(r.status));
   } else if (options.statusFilter === "notStarted") {
@@ -736,7 +628,6 @@ export function filterQueueRows(
     );
   }
 
-  // 「全体」は全件表示（Assignee で絞らない）
   if (worker === ASSIGN_ALL_ROWS_NAME) {
     return filtered.map((r) => r.sheetRowNumber);
   }
@@ -755,37 +646,31 @@ export function filterQueueRows(
 }
 
 export function buildRowPayload(
+  rules: SheetRules,
+  sheet: { id: string; label: string },
   rowByUnique: Record<string, string>,
-  rawHeaders: string[],
-  uniqueHeaders: string[],
   sheetRowNumber: number,
   options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode" | "showNamedTriplets">
 ) {
   const fullEditMode = options.fullEditMode === true;
-  let workCols = workDisplayColumns(rowByUnique, rawHeaders, uniqueHeaders, options);
-  // 全列表示は memo フィルタ・status 補完を行わず、範囲内の全列をそのまま表示。
+  let workCols = workDisplayColumns(rules, rowByUnique, options);
   if (!fullEditMode && !isAllColsMode(options)) {
-    workCols = ensureWorkDisplayCols(workCols, rawHeaders, uniqueHeaders);
+    workCols = ensureWorkDisplayCols(rules, workCols);
   }
-  const assigneeUnique = resolveWorkAssigneeUnique(rawHeaders, uniqueHeaders);
   const assignee =
-    assigneeUnique && assigneeUnique in rowByUnique
-      ? String(rowByUnique[assigneeUnique] ?? "").trim()
+    rules.assigneeUnique && rules.assigneeUnique in rowByUnique
+      ? String(rowByUnique[rules.assigneeUnique] ?? "").trim()
       : "";
   const eventName = isCellEmpty(rowByUnique["ENTITY_NAME"])
     ? ""
     : String(rowByUnique["ENTITY_NAME"]).trim();
   return {
+    sheet: sheet.id,
+    sheetLabel: sheet.label,
     sheetRowNumber,
     summary: rowSummary(rowByUnique, sheetRowNumber),
     eventName,
     assignee,
-    columns: buildColumnPayload(
-      rowByUnique,
-      workCols,
-      rawHeaders,
-      uniqueHeaders,
-      fullEditMode
-    ),
+    columns: buildColumnPayload(rules, rowByUnique, workCols, fullEditMode),
   };
 }

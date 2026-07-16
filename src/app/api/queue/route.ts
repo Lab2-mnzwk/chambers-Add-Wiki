@@ -24,8 +24,8 @@ export async function GET(request: NextRequest) {
   try {
     const options = parseOptions(request.nextUrl.searchParams);
     const forceRefresh = request.nextUrl.searchParams.get("refresh") === "true";
-    const sheetRows = await getQueue(options, forceRefresh);
-    return NextResponse.json({ sheetRows });
+    const queue = await getQueue(options, forceRefresh);
+    return NextResponse.json({ queue });
   } catch (e) {
     return apiErrorResponse(e);
   }

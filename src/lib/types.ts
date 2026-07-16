@@ -27,11 +27,55 @@ export type SheetStructure = {
   colCount: number;
 };
 
+/** Wiki 三つ組（名称 / deweyID / Wiki / 正しいwiki）の raw ヘッダー名。 */
+export type WikiTriplet = {
+  name: string;
+  dewey: string | null;
+  wiki: string;
+  ok: string;
+};
+
+/**
+ * 1 シートのヘッダーから構造検出した列ルール一式。
+ * シートごとに命名・列数が違うため、グローバル定数ではなくシート単位で保持する。
+ */
+export type SheetRules = {
+  rawHeaders: string[];
+  uniqueHeaders: string[];
+  /** rawHeader → uniqueName（最初の出現） */
+  headerMap: Record<string, string>;
+  triplets: WikiTriplet[];
+  /** 三つ組の名称列 rawHeader 集合 */
+  wikiNameHeaders: Set<string>;
+  /** 名称列 rawHeader → deweyID 列 rawHeader */
+  deweyByName: Record<string, string>;
+  /** 作業対象（水色）列の uniqueName 集合（名称/Wiki/正しいwiki/memo/Status/Assignee） */
+  lightBlueUnique: Set<string>;
+  /** 三つ組すべての列（名称/deweyID/Wiki/正しいwiki）の uniqueName 集合 */
+  tripletUnique: Set<string>;
+  memoHeaders: string[];
+  /** rawHeader → セクション名（Agent/Patient-Theme/Place/Territory） */
+  sectionByHeader: Record<string, string>;
+  statusUnique: string | null;
+  assigneeUnique: string | null;
+  assigneeHeader: string;
+  /** 全列編集モードで表示する列インデックス（0 始まり） */
+  fullDisplayIdx: Set<number>;
+  /** 全列編集モードで自由入力可にする列インデックス（0 始まり） */
+  fullEditableIdx: Set<number>;
+};
+
 export type QueueRow = {
   sheetRowNumber: number;
   renban: string;
   status: string;
   assignee: string;
+};
+
+/** 通しキュー上の 1 件（どのシートの何行目か）。 */
+export type QueueEntry = {
+  sheet: string;
+  row: number;
 };
 
 export type ColumnPayload = {
@@ -42,6 +86,7 @@ export type ColumnPayload = {
   value: string;
   inline: boolean;
   isStatus: boolean;
+  isAssignee: boolean;
   isMemo: boolean;
   isWiki: boolean;
   isWikiEdit: boolean;
@@ -56,12 +101,20 @@ export type ColumnPayload = {
 };
 
 export type RowPayload = {
+  sheet: string;
+  sheetLabel: string;
   sheetRowNumber: number;
   summary: string;
   /** 出来事名（AC列＝ENTITY_NAME）。文脈検索のクエリに使用。 */
   eventName: string;
   assignee: string;
   columns: ColumnPayload[];
+};
+
+export type SheetInfo = {
+  id: string;
+  label: string;
+  name: string;
 };
 
 export type BootstrapPayload = {
@@ -71,26 +124,28 @@ export type BootstrapPayload = {
   authMessage?: string;
   userEmail: string | null;
   spreadsheetTitle: string;
-  sheetName: string;
+  /** 対象シート一覧（通し順）。 */
+  sheets: SheetInfo[];
   sheetUrl: string;
   discordNames: string[];
+  /** アサインシートに無いが作業シートの Assignee 列に実在する担当名（表記ゆれ吸収用）。 */
+  extraAssignees: string[];
   statusOptions: string[];
   defaultIndexRows: number;
   enableWrites: boolean;
 };
 
 export type SavePayload = {
+  sheet: string;
   sheetRowNumber: number;
   worker: string;
   edits: Record<string, string>;
-  queueSheetRows: number[];
+  queue: QueueEntry[];
   options: WorkOptions;
 };
 
 export type SaveResult = {
   savedCells: number;
-  nextSheetRowNumber: number | null;
-  atEnd: boolean;
-  /** patch 反映後のキャッシュから再計算した最新キュー（行番号昇順） */
-  queueSheetRows: number[];
+  /** patch 反映後のキャッシュから再計算した最新の通しキュー */
+  queue: QueueEntry[];
 };

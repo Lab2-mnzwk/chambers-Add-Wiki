@@ -7,6 +7,7 @@ import { LoginPanel } from "./LoginPanel";
 import { WorkRowTable } from "./WorkRowTable";
 import type {
   BootstrapPayload,
+  QueueEntry,
   RowPayload,
   WorkOptions,
 } from "@/lib/types";
@@ -20,28 +21,34 @@ const LAST_ROW_KEY = "wikiWorkLastRow";
 // キュー index を一度だけ再構築して最新キューで一気にジャンプする（負荷軽減）。
 const NAV_REFRESH_SKIP_THRESHOLD = 5;
 
-function loadStoredLastRow(): number | null {
+const entryKey = (e: QueueEntry) => `${e.sheet}#${e.row}`;
+const indexOfEntry = (q: QueueEntry[], e: QueueEntry | null): number =>
+  e ? q.findIndex((x) => x.sheet === e.sheet && x.row === e.row) : -1;
+
+function loadStoredLastRow(): QueueEntry | null {
   try {
     const raw = localStorage.getItem(LAST_ROW_KEY);
     if (!raw) return null;
-    const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+    const hash = raw.indexOf("#");
+    if (hash <= 0) return null; // 旧形式（数値のみ）は無視。
+    const sheet = raw.slice(0, hash);
+    const row = Number(raw.slice(hash + 1));
+    if (!sheet || !Number.isFinite(row) || row <= 0) return null;
+    return { sheet, row: Math.floor(row) };
   } catch {
     return null;
   }
 }
 
-function saveLastRow(row: number): void {
+function saveLastRow(entry: QueueEntry): void {
   try {
-    localStorage.setItem(LAST_ROW_KEY, String(row));
+    localStorage.setItem(LAST_ROW_KEY, entryKey(entry));
   } catch {
     // localStorage 不可環境は黙って無視。
   }
 }
 
 const defaultOptions: WorkOptions = {
-  // 初回（localStorage 無し）の既定。作業者名は「全件表示」、
-  // 表示は Entity値有りのみ ON / DeweyID付与除く ON（=確認必要な白セルのみ）。
   worker: ASSIGN_ALL_ROWS_NAME,
   queueFilter: "自分担当",
   statusFilter: "incomplete",
@@ -55,7 +62,6 @@ function loadStoredOptions(): WorkOptions {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
     if (!raw) return defaultOptions;
-    // 旧バージョンは skipDone / onlyNotStarted の2 boolean を保持。statusFilter へ移行する。
     const prefs = JSON.parse(raw) as Partial<WorkOptions> & {
       skipDone?: boolean;
       onlyNotStarted?: boolean;
@@ -81,8 +87,8 @@ function optionsQuery(options: WorkOptions): string {
   return params.toString();
 }
 
-function rowQuery(options: WorkOptions): string {
-  return `lightBlueOnly=${options.lightBlueOnly}&fullEditMode=${options.fullEditMode}&showNamedTriplets=${options.showNamedTriplets}`;
+function rowQuery(sheet: string, options: WorkOptions): string {
+  return `sheet=${encodeURIComponent(sheet)}&lightBlueOnly=${options.lightBlueOnly}&fullEditMode=${options.fullEditMode}&showNamedTriplets=${options.showNamedTriplets}`;
 }
 
 /** 編集内容が読込時のスナップショットから変化しているか（未保存判定）。 */
@@ -97,28 +103,23 @@ function editsDiffer(
   return false;
 }
 
-// 「表示する列」の排他モード。内部フラグ lightBlueOnly / showNamedTriplets /
-// fullEditMode の組み合わせを 1 つの選択値として扱う。
+// 「表示する列」の排他モード。
 type ColumnMode = "whiteOnly" | "entityValue" | "allColumns" | "fullEdit";
 
 const COLUMN_MODE_FLAGS: Record<
   ColumnMode,
   Pick<WorkOptions, "lightBlueOnly" | "showNamedTriplets" | "fullEditMode">
 > = {
-  // 確認が必要な白セルのみ（Entity値あり かつ DeweyID 未付与）。
   whiteOnly: { lightBlueOnly: true, showNamedTriplets: false, fullEditMode: false },
-  // Entity値ありの列（DeweyID 付与済みも含む）。
   entityValue: { lightBlueOnly: false, showNamedTriplets: true, fullEditMode: false },
-  // すべての列（AC 以降をフィルタなしで表示）。
   allColumns: { lightBlueOnly: false, showNamedTriplets: false, fullEditMode: false },
-  // 全列を編集（AN〜GU）。
   fullEdit: { lightBlueOnly: false, showNamedTriplets: false, fullEditMode: true },
 };
 
 const COLUMN_MODE_LABELS: ReadonlyArray<readonly [ColumnMode, string]> = [
   ["entityValue", "Entity値あり"],
   ["whiteOnly", "要確認（DeweyIDなし）"],
-  ["fullEdit", "編集（AN〜GU）"],
+  ["fullEdit", "編集（三つ組＋memo＋役割列）"],
   ["allColumns", "すべて"],
 ];
 
@@ -127,18 +128,19 @@ const HELP_ACTIONS: ReadonlyArray<readonly [string, string]> = [
   ["全件表示", "すべての行を表示"],
   ["前の行", "変更を保存して前の行へ"],
   ["次の行", "変更を保存して次の行へ"],
-  ["開く", "変更を保存して指定した行を開く"],
+  ["開く", "変更を保存して指定したシート・行を開く"],
   ["リセット", "今の行の変更を読み込み時の状態に戻す"],
-  ["キュー再読込", "担当者・Status など、最新状態をシートから読み直す"],
+  ["キュー再読込", "担当者・Status など、表示対象行の最新状態をシートから読み直す"],
   ["キャッシュクリア", "アプリが一時保存している情報を削除し再生成、正しいwiki の候補を更新"],
   ["表示設定等", "スマホでの利用時に表示設定等を開く"],
 ];
 
 const HELP_CHECKS: ReadonlyArray<readonly [string, string]> = [
+  ["対象シート", "第一二弾・第三弾の両方を 1 本のキューとして通しで表示（第一二弾 → 第三弾の順）"],
   ["表示する行（進捗）", "すべて / 完了を除く（完了系を除外）/ 未着手のみ（未着手だけ）"],
   [
     "表示する列",
-    "Entity値あり / 要確認（DeweyIDなし・既定）/ 編集（AN〜GU）/ すべて",
+    "Entity値あり / 要確認（DeweyIDなし・既定）/ 編集（三つ組＋memo＋役割列）/ すべて",
   ],
   [
     "表示する行を変更した直後",
@@ -225,16 +227,13 @@ function HelpPopup({ onClose }: { onClose: () => void }) {
 export function WorkApp() {
   const { data: session } = useSession();
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
-  // 初期値は決定論的な defaultOptions（SSR と一致させハイドレーション不一致を防ぐ）。
-  // localStorage の保存値はマウント後の loadPrefs で反映する。
   const [options, setOptions] = useState<WorkOptions>(defaultOptions);
-  const [queueRows, setQueueRows] = useState<number[]>([]);
+  const [queueRows, setQueueRows] = useState<QueueEntry[]>([]);
   const [queueIndex, setQueueIndex] = useState(0);
-  const [history, setHistory] = useState<number[]>([]);
+  const [history, setHistory] = useState<QueueEntry[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [rowPayload, setRowPayload] = useState<RowPayload | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
-  // 読込時の値スナップショット。edits と差があれば「未保存」。
   const [originalEdits, setOriginalEdits] = useState<Record<string, string>>({});
   const [status, setStatus] = useState("");
   const [statusKind, setStatusKind] = useState<"" | "ok" | "error">("");
@@ -243,23 +242,18 @@ export function WorkApp() {
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [moreSettingsOpen, setMoreSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  // 直近で「キューに適用済み」の識別子（worker/statusFilter/indexRows）。
-  // 適用が成功したときだけ更新する。作業者変更の判定（位置維持の可否）に使う。
+  const [jumpSheet, setJumpSheet] = useState("");
   const appliedQueueKeyRef = useRef<{
     worker: string;
     statusFilter: WorkOptions["statusFilter"];
     indexRows: number;
   } | null>(null);
-  // queueRows を書き換える非同期処理の世代カウンタ。
-  // 後発の書込が常に最新。古い in-flight 応答（例: 進捗フィルタで算出された
-  // キュー）が後から届いて上書きするのを防ぐ。
   const queueWriteSeqRef = useRef(0);
-  // 前回開いていた行（localStorage 復元用）。初回キュー構築時に一度だけ適用する。
-  const pendingRestoreRowRef = useRef<number | null>(null);
+  const pendingRestoreRowRef = useRef<QueueEntry | null>(null);
 
-  const currentRow = useMemo(() => {
+  const currentEntry = useMemo<QueueEntry | null>(() => {
     if (historyIndex >= 0 && history[historyIndex]) return history[historyIndex];
-    if (queueRows.length) return queueRows[queueIndex];
+    if (queueRows.length) return queueRows[queueIndex] ?? null;
     return null;
   }, [history, historyIndex, queueRows, queueIndex]);
 
@@ -268,45 +262,55 @@ export function WorkApp() {
     [edits, originalEdits]
   );
 
-  // 「前の行」可否: 現在行より小さい行番号がキューにあれば前へ進める。
-  const hasPrevRow = useMemo(
-    () => currentRow != null && queueRows.some((r) => r < currentRow),
-    [currentRow, queueRows]
-  );
+  // 「前の行」可否: キュー内で現在行より前の位置に行があれば前へ進める。
+  const hasPrevRow = useMemo(() => {
+    const pos = indexOfEntry(queueRows, currentEntry);
+    return pos > 0;
+  }, [currentEntry, queueRows]);
 
   // 開いている行を記憶し、次回起動時に同じ行を復元する。
   useEffect(() => {
-    if (currentRow != null) saveLastRow(currentRow);
-  }, [currentRow]);
+    if (currentEntry != null) saveLastRow(currentEntry);
+  }, [currentEntry]);
 
-  // 背景化・離脱時の自動保存に使う最新値（イベントリスナのクロージャ陳腐化を避ける）。
+  // 「開く」のシート選択は、既定で現在行のシートに追従する。
+  useEffect(() => {
+    if (rowPayload?.sheet) setJumpSheet(rowPayload.sheet);
+  }, [rowPayload?.sheet]);
+
+  // 背景化・離脱時の自動保存に使う最新値。
   const flushStateRef = useRef({
-    currentRow: null as number | null,
+    currentEntry: null as QueueEntry | null,
     edits: {} as Record<string, string>,
     originalEdits: {} as Record<string, string>,
     options,
     queueRows,
   });
   useEffect(() => {
-    flushStateRef.current = { currentRow, edits, originalEdits, options, queueRows };
-  }, [currentRow, edits, originalEdits, options, queueRows]);
+    flushStateRef.current = {
+      currentEntry,
+      edits,
+      originalEdits,
+      options,
+      queueRows,
+    };
+  }, [currentEntry, edits, originalEdits, options, queueRows]);
 
-  // タブ非表示化（visibilitychange=hidden）と離脱（pagehide）で、未保存があれば自動保存。
-  // hidden 時は keepalive fetch（成功で clean 化）、pagehide は sendBeacon（最後の砦）。
   useEffect(() => {
     const buildBody = (s: typeof flushStateRef.current) =>
       JSON.stringify({
-        sheetRowNumber: s.currentRow,
+        sheet: s.currentEntry?.sheet ?? "",
+        sheetRowNumber: s.currentEntry?.row ?? 0,
         worker: s.options.worker,
         edits: s.edits,
-        queueSheetRows: s.queueRows,
+        queue: s.queueRows,
         options: s.options,
       });
 
     const onVisibility = () => {
       if (document.visibilityState !== "hidden") return;
       const s = flushStateRef.current;
-      if (!s.currentRow || !editsDiffer(s.edits, s.originalEdits)) return;
+      if (!s.currentEntry || !editsDiffer(s.edits, s.originalEdits)) return;
       const cleaned = { ...s.edits };
       fetch("/api/save", {
         method: "POST",
@@ -324,7 +328,7 @@ export function WorkApp() {
 
     const onPageHide = () => {
       const s = flushStateRef.current;
-      if (!s.currentRow || !editsDiffer(s.edits, s.originalEdits)) return;
+      if (!s.currentEntry || !editsDiffer(s.edits, s.originalEdits)) return;
       if (typeof navigator !== "undefined" && navigator.sendBeacon) {
         navigator.sendBeacon(
           "/api/save",
@@ -359,11 +363,9 @@ export function WorkApp() {
     localStorage.setItem(PREFS_KEY, JSON.stringify(next));
   }, []);
 
-  /** 読み込んだ行のライブな作業 Status 値（GJ 列）。判定不能時は空。 */
   const rowStatusOf = (payload: RowPayload): string =>
     payload.columns.find((c) => c.isStatus)?.value ?? "";
 
-  /** 移動先のライブ status が現在の進捗フィルタで除外対象か。 */
   const shouldSkipLiveRow = (payload: RowPayload): boolean => {
     const s = rowStatusOf(payload);
     if (options.statusFilter === "incomplete") return isDoneStatus(s);
@@ -382,8 +384,8 @@ export function WorkApp() {
 
   // 表示状態を変えずに行データだけ取得する（移動時の探索用＝途中行を描画しない）。
   const fetchRowPayload = useCallback(
-    async (sheetRowNumber: number, opts: WorkOptions): Promise<RowPayload> => {
-      const res = await fetch(`/api/row/${sheetRowNumber}?${rowQuery(opts)}`);
+    async (entry: QueueEntry, opts: WorkOptions): Promise<RowPayload> => {
+      const res = await fetch(`/api/row/${entry.row}?${rowQuery(entry.sheet, opts)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "行の読み込みに失敗");
       return data as RowPayload;
@@ -392,9 +394,9 @@ export function WorkApp() {
   );
 
   const loadRow = useCallback(
-    async (sheetRowNumber: number, opts: WorkOptions): Promise<RowPayload> => {
+    async (entry: QueueEntry, opts: WorkOptions): Promise<RowPayload> => {
       setMessage("行を読み込み中…");
-      const data = await fetchRowPayload(sheetRowNumber, opts);
+      const data = await fetchRowPayload(entry, opts);
       setRowPayload(data);
       syncEditsFromPayload(data);
       setMessage("");
@@ -411,9 +413,8 @@ export function WorkApp() {
       const res = await fetch(`/api/queue?${qs}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "キューの読み込みに失敗");
-      // 自分より後発の queue 書込が始まっていれば、この古い応答は破棄する。
       if (seq !== queueWriteSeqRef.current) return;
-      const rows = (data.sheetRows ?? []) as number[];
+      const rows = (data.queue ?? []) as QueueEntry[];
       setQueueRows(rows);
 
       if (!rows.length) {
@@ -428,18 +429,18 @@ export function WorkApp() {
 
       if (!keepPosition || historyIndex < 0) {
         // 初回起動時は前回開いていた行を復元（キューに含まれる場合のみ）。
-        let startRow = rows[0];
+        let startEntry = rows[0];
         const restore = pendingRestoreRowRef.current;
         if (restore != null) {
           pendingRestoreRowRef.current = null;
-          if (rows.includes(restore)) startRow = restore;
+          if (indexOfEntry(rows, restore) >= 0) startEntry = restore;
         }
-        nextHistory = [startRow];
+        nextHistory = [startEntry];
         nextHistoryIndex = 0;
-        nextQueueIndex = Math.max(0, rows.indexOf(startRow));
+        nextQueueIndex = Math.max(0, indexOfEntry(rows, startEntry));
       } else {
-        const row = history[historyIndex];
-        const idx = rows.indexOf(row);
+        const entry = history[historyIndex];
+        const idx = indexOfEntry(rows, entry);
         if (idx >= 0) nextQueueIndex = idx;
       }
 
@@ -487,15 +488,13 @@ export function WorkApp() {
     if (!bootstrap || bootstrap.authRequired) return;
     setOptions((prev) => {
       let next = prev;
-      // 作業者の既定補完（保存値が一覧に無ければ先頭の作業者にする）。
+      const allWorkers = [...bootstrap.discordNames, ...bootstrap.extraAssignees];
       if (
-        bootstrap.discordNames.length &&
-        !(prev.worker && bootstrap.discordNames.includes(prev.worker))
+        allWorkers.length &&
+        !(prev.worker && allWorkers.includes(prev.worker))
       ) {
-        next = { ...next, worker: bootstrap.discordNames[0] };
+        next = { ...next, worker: allWorkers[0] };
       }
-      // インデックス行数は .env.local の DEFAULT_INDEX_ROWS（サーバー既定）を正とする。
-      // UI からは編集させず、localStorage の古い値があっても常にサーバー既定へ合わせる。
       if (
         bootstrap.defaultIndexRows &&
         prev.indexRows !== bootstrap.defaultIndexRows
@@ -507,10 +506,6 @@ export function WorkApp() {
     });
   }, [bootstrap, savePrefs]);
 
-  // 正しいWiki補完インデックスの事前ウォームアップ。
-  // 行表示前にサーバー側キャッシュ（全行 batchGet）を構築しておき、
-  // 入力欄の先読み候補がキャッシュヒットで即返るようにする。
-  // indexRows ごとに 1 回だけ実行する（移行で値が変わったら再ウォームアップ）。
   const wikiWarmedRowsRef = useRef<number | null>(null);
   useEffect(() => {
     if (!bootstrap || bootstrap.authRequired) return;
@@ -533,22 +528,14 @@ export function WorkApp() {
     void (async () => {
       setLoading(true);
       try {
-      // キュー再読込（進捗フィルタ/indexRows・作業者変更）の前に未保存編集を自動保存する。
-      // 移動操作と同じ挙動に統一し、再読込で編集（例: Status 変更）が消えるのを防ぐ。
-      const saved = await saveCurrentIfDirty();
-      if (!saved.ok) {
-        // 保存失敗時は選択（進捗フィルタ等）を勝手に巻き戻さない。
-        // ここでキュー再読込すると未保存編集が失われるため中断するだけにし、
-        // エラーは saveCurrentIfDirty が表示済み。次の移動操作で
-        // resolveNavigationQueue が「すべて」なら最新キューを取り直して自己修復する。
-        return;
-      }
-      appliedQueueKeyRef.current = {
-        worker: options.worker,
-        statusFilter: options.statusFilter,
-        indexRows: options.indexRows,
-      };
-      await loadQueue(options, keepPosition);
+        const saved = await saveCurrentIfDirty();
+        if (!saved.ok) return;
+        appliedQueueKeyRef.current = {
+          worker: options.worker,
+          statusFilter: options.statusFilter,
+          indexRows: options.indexRows,
+        };
+        await loadQueue(options, keepPosition);
       } finally {
         setLoading(false);
       }
@@ -568,20 +555,18 @@ export function WorkApp() {
   };
 
   const applyDisplayOptions = async (next: WorkOptions) => {
-    // 表示モード変更で行を再読込する前に未保存編集を自動保存（編集消失を防ぐ）。
     const saved = await saveCurrentIfDirty();
     if (!saved.ok) return;
     setOptions(next);
     savePrefs(next);
-    if (!currentRow) return;
+    if (!currentEntry) return;
     try {
-      await loadRow(currentRow, next);
+      await loadRow(currentEntry, next);
     } catch (e) {
       setMessage(String(e), "error");
     }
   };
 
-  // 「表示する列」の現在モード（内部フラグから排他値を導出）。
   const columnMode: ColumnMode = options.fullEditMode
     ? "fullEdit"
     : options.showNamedTriplets
@@ -594,15 +579,14 @@ export function WorkApp() {
     void applyDisplayOptions({ ...options, ...COLUMN_MODE_FLAGS[mode] });
 
   /**
-   * 現在行に未保存の変更があれば保存する（変更なしは何もしない＝書き込み負荷を抑える）。
-   * 戻り値: ok=保存成功 or 変更なし、失敗時 ok=false。queueRows は保存後の最新キュー。
-   * すべての移動操作はこれを先に await し、ok=false なら移動を中止する。
+   * 現在行に未保存の変更があれば保存する。戻り値: ok=保存成功 or 変更なし。
+   * queueRows は保存後の最新の通しキュー。
    */
   const saveCurrentIfDirty = async (): Promise<{
     ok: boolean;
-    queueRows: number[];
+    queueRows: QueueEntry[];
   }> => {
-    if (!currentRow || !dirty) return { ok: true, queueRows };
+    if (!currentEntry || !dirty) return { ok: true, queueRows };
     const seq = ++queueWriteSeqRef.current;
     setMessage("保存中…");
     try {
@@ -610,20 +594,18 @@ export function WorkApp() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sheetRowNumber: currentRow,
+          sheet: currentEntry.sheet,
+          sheetRowNumber: currentEntry.row,
           worker: options.worker,
           edits,
-          queueSheetRows: queueRows,
+          queue: queueRows,
           options,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "保存に失敗");
 
-      // patch 反映後の最新キューでクライアントの基準を更新（次/前の判定を統一）。
-      // ただし、この保存より後にキュー再読込が始まっていれば state 反映はしない
-      // （古い応答での上書き防止）。戻り値 queueRows は呼び出し側の移動判定に使う。
-      const nextQueueRows = (data.queueSheetRows ?? queueRows) as number[];
+      const nextQueueRows = (data.queue ?? queueRows) as QueueEntry[];
       if (seq === queueWriteSeqRef.current) setQueueRows(nextQueueRows);
       setOriginalEdits(edits);
       setMessage(`${data.savedCells} セルを保存しました。`, "ok");
@@ -640,12 +622,10 @@ export function WorkApp() {
    */
   const resolveNavigationQueue = async (): Promise<{
     ok: boolean;
-    queueRows: number[];
+    queueRows: QueueEntry[];
   }> => {
     const saved = await saveCurrentIfDirty();
     if (!saved.ok) return saved;
-    // 進捗フィルタ有効時は保存応答のキューがそのまま正。
-    // 「すべて」のときだけサーバーから再取得し、除外されていた行を復元する。
     if (options.statusFilter !== "all") return saved;
 
     const res = await fetch(`/api/queue?${optionsQuery(options)}`);
@@ -654,19 +634,18 @@ export function WorkApp() {
       setMessage(String(data.error ?? "キューの読み込みに失敗"), "error");
       return { ok: false, queueRows: saved.queueRows };
     }
-    const rows = (data.sheetRows ?? []) as number[];
+    const rows = (data.queue ?? []) as QueueEntry[];
     setQueueRows(rows);
     return { ok: true, queueRows: rows };
   };
 
-  // 大量スキップ時の負荷軽減: 行を1件ずつ確認し続ける代わりに、サーバーで
-  // キュー index を1回だけ再構築して最新キューを取得する（status 列の単発取得）。
-  const refreshQueueRows = async (): Promise<number[] | null> => {
+  // 大量スキップ時の負荷軽減: サーバーでキュー index を1回だけ再構築して最新キューを取得。
+  const refreshQueueRows = async (): Promise<QueueEntry[] | null> => {
     try {
       const res = await fetch(`/api/queue?${optionsQuery(options)}&refresh=true`);
       const data = await res.json();
       if (!res.ok) return null;
-      const rows = (data.sheetRows ?? []) as number[];
+      const rows = (data.queue ?? []) as QueueEntry[];
       setQueueRows(rows);
       return rows;
     } catch {
@@ -674,53 +653,61 @@ export function WorkApp() {
     }
   };
 
-  const goPrev = async () => {
+  // 探索して次/前の対象行へジャンプする（途中行は描画しない）。
+  const navigate = async (dir: "next" | "prev") => {
     if (loading) return;
     setLoading(true);
     try {
       const saved = await resolveNavigationQueue();
       if (!saved.ok) return;
-      // goNext と対称に「キュー基準」で前の行（現在行より小さい最大の行番号）を探す。
-      // 探索中は fetchRowPayload で status 確認のみ行い、途中行は描画しない。
-      // 着地する行が決まって初めて setRowPayload する（ちらつき防止）。
       let q = saved.queueRows;
-      let cursor = currentRow;
+      const removed = new Set<string>();
+      let ci = indexOfEntry(q, currentEntry);
+      if (dir === "prev" && ci < 0) ci = q.length;
       let skipped = 0;
       let refreshed = false;
-      setMessage("前の対象行を探索中…");
+      setMessage(dir === "next" ? "次の対象行を探索中…" : "前の対象行を探索中…");
       while (true) {
-        const from = cursor;
-        const prev =
-          from != null ? q.filter((r) => r < from).pop() ?? null : null;
-        if (prev == null) {
-          // 探索では描画していないので、現在の表示行はそのまま（復元不要）。
-          setMessage("");
-          showToast("前の行がありません");
+        ci = dir === "next" ? ci + 1 : ci - 1;
+        while (ci >= 0 && ci < q.length && removed.has(entryKey(q[ci]))) {
+          ci = dir === "next" ? ci + 1 : ci - 1;
+        }
+        if (ci < 0 || ci >= q.length) {
+          if (dir === "next") setMessage("キューの末尾です。", "ok");
+          else {
+            setMessage("");
+            showToast("前の行がありません");
+          }
           return;
         }
-        const payload = await fetchRowPayload(prev, options);
-        // スキップ設定（完了/未着手以外）に該当するライブ status の行を飛ばす。
+        const cand = q[ci];
+        const payload = await fetchRowPayload(cand, options);
         if (shouldSkipLiveRow(payload)) {
-          q = q.filter((r) => r !== prev);
-          cursor = prev;
+          removed.add(entryKey(cand));
           skipped += 1;
           if (!refreshed && skipped >= NAV_REFRESH_SKIP_THRESHOLD) {
             refreshed = true;
-            const refreshedRows = await refreshQueueRows();
-            if (refreshedRows) q = refreshedRows;
+            const r = await refreshQueueRows();
+            if (r) {
+              q = r;
+              removed.clear();
+              ci = indexOfEntry(q, currentEntry);
+              if (dir === "prev" && ci < 0) ci = q.length;
+            }
           }
           continue;
         }
         // 着地: ここで初めて描画する。
+        const finalQ = q.filter((e) => !removed.has(entryKey(e)));
         setRowPayload(payload);
         syncEditsFromPayload(payload);
         setMessage("");
-        setQueueRows(q);
+        setQueueRows(finalQ);
         const nextHistory = history.slice(0, historyIndex + 1);
-        nextHistory.push(prev);
+        nextHistory.push(cand);
         setHistory(nextHistory);
         setHistoryIndex(nextHistory.length - 1);
-        const idx = q.indexOf(prev);
+        const idx = indexOfEntry(finalQ, cand);
         if (idx >= 0) setQueueIndex(idx);
         break;
       }
@@ -731,6 +718,9 @@ export function WorkApp() {
     }
   };
 
+  const goPrev = () => void navigate("prev");
+  const goNext = () => void navigate("next");
+
   const goJump = async () => {
     const target = Number(
       (document.getElementById("jumpRow") as HTMLInputElement | null)?.value
@@ -739,18 +729,22 @@ export function WorkApp() {
       setMessage("行番号は 2 以上を指定してください。", "error");
       return;
     }
+    const sheetId =
+      jumpSheet || currentEntry?.sheet || bootstrap?.sheets[0]?.id || "";
+    if (!sheetId) {
+      setMessage("シートを選択してください。", "error");
+      return;
+    }
     if (loading) return;
     setLoading(true);
     try {
       const saved = await resolveNavigationQueue();
       if (!saved.ok) return;
       const q = saved.queueRows;
+      const entry: QueueEntry = { sheet: sheetId, row: target };
 
       setMessage("行を読み込み中…");
-      const res = await fetch(`/api/row/${target}?${rowQuery(options)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "行の読み込みに失敗");
-      const payload = data as RowPayload;
+      const payload = await fetchRowPayload(entry, options);
 
       if (
         options.worker &&
@@ -759,19 +753,19 @@ export function WorkApp() {
         payload.assignee !== options.worker
       ) {
         setMessage(
-          `指定行（${target}）は他の作業者「${payload.assignee}」の担当のため開けません。`,
+          `指定行（${payload.sheetLabel} 行${target}）は他の作業者「${payload.assignee}」の担当のため開けません。`,
           "error"
         );
         return;
       }
 
       const nextHistory = history.slice(0, historyIndex + 1);
-      nextHistory.push(target);
+      nextHistory.push(entry);
       setHistory(nextHistory);
       setHistoryIndex(nextHistory.length - 1);
-      const idx = q.indexOf(target);
+      const idx = indexOfEntry(q, entry);
       if (idx >= 0) setQueueIndex(idx);
-      if (!q.includes(target)) {
+      if (idx < 0) {
         showToast("現在のキュー外の行です（表示のみ）");
       }
       setRowPayload(payload);
@@ -784,62 +778,6 @@ export function WorkApp() {
     }
   };
 
-  const goNext = async () => {
-    if (loading) return;
-    setLoading(true);
-    try {
-      const saved = await resolveNavigationQueue();
-      if (!saved.ok) return;
-      // キュー・スナップショットは古い可能性がある（外部/別セッションでの完了など）。
-      // 探索中は fetchRowPayload で status 確認のみ行い、途中行は描画しない。
-      // 移動先のライブ status が対象外なら外して次へ進み、着地行だけ描画する。
-      let q = saved.queueRows;
-      let cursor = currentRow;
-      let skipped = 0;
-      let refreshed = false;
-      setMessage("次の対象行を探索中…");
-      while (true) {
-        const from = cursor;
-        const next =
-          from != null ? q.find((r) => r > from) ?? null : q[0] ?? null;
-        if (next == null) {
-          // 探索では描画していないので、現在の表示行はそのまま（復元不要）。
-          setMessage("キューの末尾です。", "ok");
-          return;
-        }
-        const payload = await fetchRowPayload(next, options);
-        if (shouldSkipLiveRow(payload)) {
-          q = q.filter((r) => r !== next);
-          cursor = next;
-          skipped += 1;
-          if (!refreshed && skipped >= NAV_REFRESH_SKIP_THRESHOLD) {
-            refreshed = true;
-            const refreshedRows = await refreshQueueRows();
-            if (refreshedRows) q = refreshedRows;
-          }
-          continue;
-        }
-        // 着地: ここで初めて描画する。
-        setRowPayload(payload);
-        syncEditsFromPayload(payload);
-        setMessage("");
-        setQueueRows(q);
-        const nextHistory = history.slice(0, historyIndex + 1);
-        nextHistory.push(next);
-        setHistory(nextHistory);
-        setHistoryIndex(nextHistory.length - 1);
-        const idx = q.indexOf(next);
-        if (idx >= 0) setQueueIndex(idx);
-        break;
-      }
-    } catch (e) {
-      setMessage(String(e), "error");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 行内の編集を読込時の値へ戻す（自動保存で確定する前の「取り消し」手段）。
   const resetEdits = () => {
     if (!dirty) return;
     setEdits(originalEdits);
@@ -884,6 +822,8 @@ export function WorkApp() {
     );
   }
 
+  const displayPos = indexOfEntry(queueRows, currentEntry);
+
   return (
     <div className={styles.page}>
       <header className={styles.header}>
@@ -901,8 +841,6 @@ export function WorkApp() {
         </div>
         <div className={styles.headerActions}>
           {session?.user?.email ? (
-            // サインイン中は bootstrap 取得が失敗（権限不足・500 等）しても
-            // ログアウト導線を必ず出す（別アカウントで再ログインできるようにする）。
             <div className={styles.userBlock}>
               <span className={styles.userEmail}>
                 {bootstrap?.userEmail ?? session.user.email}
@@ -949,6 +887,15 @@ export function WorkApp() {
                   {name}
                 </option>
               ))}
+              {bootstrap && bootstrap.extraAssignees.length > 0 && (
+                <optgroup label="その他（シート上の担当名）">
+                  {bootstrap.extraAssignees.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </div>
 
@@ -1034,9 +981,7 @@ export function WorkApp() {
         </aside>
 
         <main className={styles.main}>
-          {!bootstrap && (
-            <div className={styles.empty}>読み込み中…</div>
-          )}
+          {!bootstrap && <div className={styles.empty}>読み込み中…</div>}
 
           {bootstrap && loading && !rowPayload && (
             <div className={styles.empty}>行を読み込み中…</div>
@@ -1056,14 +1001,16 @@ export function WorkApp() {
             <>
               <div className={styles.summary}>{rowPayload.summary}</div>
               <div className={styles.progress}>
-                キュー {queueIndex + 1} / {queueRows.length} · シート行{" "}
+                キュー {displayPos >= 0 ? displayPos + 1 : "-"} / {queueRows.length}
+                {" · "}
+                <strong>{rowPayload.sheetLabel}</strong> 行{" "}
                 {rowPayload.sheetRowNumber}
               </div>
               <WorkRowTable
                 columns={rowPayload.columns}
                 edits={edits}
                 indexRows={options.indexRows}
-                rowKey={rowPayload.sheetRowNumber}
+                rowKey={`${rowPayload.sheet}#${rowPayload.sheetRowNumber}`}
                 eventName={rowPayload.eventName}
                 onEdit={(uniqueName, value) =>
                   setEdits((prev) => ({ ...prev, [uniqueName]: value }))
@@ -1079,13 +1026,27 @@ export function WorkApp() {
                   ← 前の行
                 </button>
                 <div className={styles.navJump}>
+                  {bootstrap && bootstrap.sheets.length > 1 && (
+                    <select
+                      className={styles.jumpSheet}
+                      value={jumpSheet}
+                      onChange={(e) => setJumpSheet(e.target.value)}
+                      aria-label="開くシート"
+                    >
+                      {bootstrap.sheets.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <input
                     id="jumpRow"
                     type="number"
                     min={2}
                     className={styles.jumpInput}
                     defaultValue={rowPayload.sheetRowNumber}
-                    key={rowPayload.sheetRowNumber}
+                    key={`${rowPayload.sheet}#${rowPayload.sheetRowNumber}`}
                     aria-label="シート行番号"
                   />
                   <button

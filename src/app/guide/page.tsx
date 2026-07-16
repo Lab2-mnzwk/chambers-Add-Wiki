@@ -23,6 +23,12 @@ export default function GuidePage() {
         自動保存されます。
       </p>
 
+      <div className={styles.note}>
+        対象シートは <strong>第一二弾</strong> と <strong>第三弾</strong> の2つで、
+        <strong>1本のキューとして通しで</strong>表示されます（第一二弾 → 第三弾の順）。
+        今どちらのシートを見ているかは、行番号の表示に併記されます。
+      </div>
+
       <nav className={styles.toc} aria-label="目次">
         <strong>目次</strong>
         <ul>
@@ -69,8 +75,8 @@ export default function GuidePage() {
             編集でき、入力欄が無い列は読み取り専用です。
           </li>
           <li>
-            <strong>キュー ◯ / ◯ ・ シート行 ◯</strong>: 「今の位置 / 対象行の総数」と、
-            実際のスプレッドシート上の行番号を示します。
+            <strong>キュー ◯ / ◯ ・ シート名 行 ◯</strong>: 「今の位置 / 対象行の総数」と、
+            <strong>どのシート（第一二弾／第三弾）の何行目か</strong>を示します。
           </li>
           <li>
             列が横に長い場合は、作業表を横スクロールできます。行を移動すると
@@ -110,7 +116,10 @@ export default function GuidePage() {
             </tr>
             <tr>
               <th scope="row">開く</th>
-              <td>変更を保存して、入力した行番号の行を開きます。</td>
+              <td>
+                変更を保存して、指定したシート・行番号の行を開きます。行番号の左の
+                <strong>シート選択</strong>で第一二弾／第三弾を選べます（既定は今のシート）。
+              </td>
             </tr>
             <tr>
               <th scope="row">リセット</th>
@@ -205,8 +214,11 @@ export default function GuidePage() {
               </td>
             </tr>
             <tr>
-              <th scope="row">編集（AN〜GU）</th>
-              <td>広い範囲の列を表示し、自由入力で編集できるモードです。</td>
+              <th scope="row">編集（三つ組＋memo＋役割列）</th>
+              <td>
+                三つ組（名称／DeweyID／Wiki／正しいwiki）・memo・役割列（Action など）を
+                広く表示し、自由入力で編集できるモードです。
+              </td>
             </tr>
             <tr>
               <th scope="row">すべて</th>
@@ -226,7 +238,8 @@ export default function GuidePage() {
         <ul className={styles.list}>
           <li>
             編集できるのは主に <strong>Status</strong>・<strong>memo</strong>・
-            <strong>正しいwiki</strong> の列です（「編集（AN〜GU）」モードではより広範囲）。
+            <strong>正しいwiki</strong> の列です（「編集（三つ組＋memo＋役割列）」モードでは
+            より広範囲）。
           </li>
           <li>
             <strong>自動保存</strong>: 「前の行」「次の行」「開く」を押すと、未保存の
@@ -267,6 +280,10 @@ export default function GuidePage() {
             表示します。入力中の文字でさらに絞り込まれます。
           </li>
           <li>候補が無いときは「候補なし」と表示されます。</li>
+          <li>
+            候補は<strong>第一二弾・第三弾の両シートの実績を合算</strong>して表示されます
+            （片方のシートで確定した正解が、もう片方でも候補に出ます）。
+          </li>
           <li>
             保存すると、その内容は次回以降の候補として学習されます。候補が古いと感じたら
             <strong>キャッシュクリア</strong>で作り直せます。

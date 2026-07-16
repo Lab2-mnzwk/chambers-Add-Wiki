@@ -3,12 +3,19 @@
 正本実装はリポジトリ直下の **Next.js アプリ**（`src/`）。
 
 - スプレッドシート ID: `1Mc3pX949vlO_uxWpimn7_DsUAYr87GmroqXft6fvB4I`
-- 作業シート: `wiki付与作業シート（第一弾、第二弾）`（`SHEET_NAME`。環境変数で上書き可。シート名変更時はこの値のみ変更すればよい）
-- Status: 作業 Status（`Assignee` 列の直前の `Status`、現状 GJ 列）。選択肢は `未着手` / `完了` / `完了（正規化変更）` / `要確認`（`WORK_STATUS_OPTIONS`、シートのドロップダウンと同順）。
-  - シート前方に別の `Status`（エンティティ Status＝AE 列、値は `Done - 変更有り/なし` 等）が存在するが、**作業 Status とは別物**。解決は「**Assignee 列の直前の `Status`**」を優先する隣接ベース（`resolveWorkStatusUnique`）で、列の増減（deweyID 挿入等）でも追従。エンティティ Status（AE）は無視・**書込禁止**（`WRITE_DENYLIST`）。
-- Assignee: 作業 Assignee（`Assignee` 列。現状 GK 列。名前で解決）
-- **deweyID 列**: 各三つ組は `名称 / deweyID / Wiki / 正しいwiki` の並び。deweyID 列自体は**表示しない**が、「deweyID有りを除く」判定に使う（`WIKI_DEWEY_BY_NAME`）。`-`・空は「値無し」扱い。
+- **作業シート（複数・通しキュー）**: 同一スプレッドシート内の複数タブを 1 本のキューとして扱う（`WORK_SHEETS`、`src/lib/config.ts`）。順序は **第一二弾 → 第三弾**。
+  - `第一二弾`（id=`s12`, `wiki付与作業シート（第一弾、第二弾）`, 担当列 `Assignee`）
+  - `第三弾`（id=`s3`, `wiki付与作業シート（第三弾）`, 担当列 `wiki付与Assignee`）
+  - シート名は `SHEET_NAME` / `SHEET_NAME_3` で上書き可。両シートとも編集可。
+- **列レイアウトは構造検出**: 三つ組の命名・個数・Status/Assignee 列名はシートごとに異なる（例: `A_name1/A_deweyID1/A_Wiki1` vs `A_1/A_dID_1/A_wiki1`、Agent 8 個 vs 6 個）。そのため列ルールはハードコードせず、各シートのヘッダーから **構造検出**する（`buildSheetRules`、`src/lib/sheet-rules.ts`）。生成物は 1 シート分の `SheetRules`（三つ組・水色列・deweyID 対応・Status/Assignee・memo・全列編集範囲）。
+  - **三つ組検出**: `正しいwiki` を含む列を起点に、直前 3 列 `[名称, deweyID, Wiki]` を 1 組とする（両シートとも並び順は共通）。deweyID 列は命名ゆれ（`deweyID` / `dID`）を正規表現で識別。
+  - **セクション対応付け**: ヘッダーを左→右に走査し、`Agent` / `Patient-Theme` / `Place` / `Territory` の見出し列で現在セクションを切替え、以降の列（三つ組・memo）に対応付ける。
+- Status: 作業 Status（**担当列の直前の `Status`**）。選択肢は `未着手` / `完了` / `完了（正規化変更）` / `要確認`（`WORK_STATUS_OPTIONS`、シートのドロップダウンと同順）。
+  - シート前方に別の `Status`（エンティティ Status、値は `Done - 変更有り/なし` 等）が存在するが、**作業 Status とは別物**。解決は「**担当列の直前の `Status`**」（`buildSheetRules` の `statusUnique`）。エンティティ Status（AE）は無視・**書込禁止**（`WRITE_DENYLIST`）。
+- Assignee: 作業 Assignee（シートごとの担当列。第一二弾＝`Assignee` / 第三弾＝`wiki付与Assignee`。`書籍補完Assignee` は使わない）。
+- **deweyID 列**: 各三つ組は `名称 / deweyID / Wiki / 正しいwiki` の並び。deweyID 列自体は**表示しない**が、「deweyID有りを除く」判定に使う（`SheetRules.deweyByName`）。`-`・空は「値無し」扱い。
 - **完了系ステータス**: `完了` と `完了（正規化変更）` は完了扱い（`DONE_STATUSES` / `isDoneStatus`）。進捗フィルタ「完了を除く」は両方を除外する。
+- **行の識別**: 行は **シート ID ＋ シート行番号**の複合（`QueueEntry = { sheet, row }`）。通しキュー内でシートを跨いでも一意に識別できる。
 
 ## 作業表 — 表示列
 
@@ -26,14 +33,16 @@
   - `all`（すべて）: 絞り込みなし。
   - `incomplete`（完了を除く・既定）: 完了系行（`完了` / `完了（正規化変更）`、`isDoneStatus`）を除外（＝未着手＋要確認）。
   - `notStarted`（未着手のみ）: 正規化後ステータスが「未着手」（空欄含む）の行だけ（要確認・完了系も除外）。
-- **行指定で開く**: 作業者名を選択している場合、Assignee が他の作業者の行は開けない（未担当・自分担当のみ可）。`RowPayload.assignee` で判定。
+- **行指定で開く**: 作業者名を選択している場合、Assignee が他の作業者の行は開けない（未担当・自分担当のみ可）。`RowPayload.assignee` で判定。**「開く」はシート選択＋行番号**で行う（シート選択の既定は現在行のシート）。行番号だけでは 2 シートに同番号が存在し得るため。
+- **現在位置の表示**: 進捗表示は `キュー N / M ・ <シート名> 行 R`（`RowPayload.sheetLabel`）。今どちらのシートの何行目かが常に分かる。
 
 #### キューキャッシュと進捗フィルタ（次/前の統一）
 
-- キュー index は `.cache/<spreadsheetId>.json` の `queueIndex`（行ごとの status/assignee）に保持。`/api/queue` はこのキャッシュから `filterQueueRows` で対象行を算出（シート I/O なし）。進捗フィルタは **キャッシュの status** を見て対象外行を除外する。
-- 保存で Status が変わると `patchQueueIndex` がキャッシュの status を更新する。
-- 保存（`saveRow`）は **patch 反映後のキャッシュから最新キューを再計算**して返す（`SaveResult.queueSheetRows`、行番号昇順）。「次の行」は現在行より後ろの最初の行（`r > current`）＝最新の対象行。
-- クライアントは保存応答の `queueSheetRows` で `queueRows` を更新し、**「前の行」もこの最新リストを参照**（進捗フィルタ有効時、リストに無い＝対象外の行は戻り時もスキップ）。
+- **キャッシュはシート単位**: `.cache/<spreadsheetId>__<sheetId>.json`（例 `..._s12.json` / `..._s3.json`）に、シートごとの `structure` / `queueIndex`（行ごとの status/assignee）/ 行データ / Wiki 履歴を保持。
+- `/api/queue` は **全シートのキャッシュ index を `filterQueueRows` で絞り、第一二弾→第三弾の順に連結**して通しキュー（`QueueEntry[]`）を返す（シート I/O なし）。進捗フィルタは **キャッシュの status** を見て対象外行を除外する。
+- 保存で Status が変わると `patchQueueIndex` が該当シートのキャッシュ status を更新する。
+- 保存（`saveRow`）は **patch 反映後の各シートのキャッシュから通しキューを再計算**して返す（`SaveResult.queue`）。index 未構築のシートはクライアントが送った `queue` の該当分をそのまま残す。
+- クライアントは保存応答の `queue` で `queueRows` を更新し、**移動は通しキュー上の「位置（index）」基準**で行う。「次の行」＝現在位置の次、「前の行」＝前。進捗フィルタ有効時、リストに無い＝対象外の行は移動時もスキップ。
 - **移動時の探索は途中行を描画しない**: `次の行` / `前の行` は、キュー上の次候補をメモリで特定し、`fetchRowPayload`（表示状態を変えない取得）でライブ status のみ確認する。`shouldSkipLiveRow` で対象外なら描画せず次へ。**着地する行が決まって初めて `setRowPayload`** するため、スキップ中の途中行はちらつかない（探索中は「次/前の対象行を探索中…」表示）。該当行が無ければ現在の表示行はそのまま維持（復元不要）。
 - **大量スキップ時の負荷軽減**: 1回の移動でライブ status スキップが `NAV_REFRESH_SKIP_THRESHOLD`（=5）以上に達したら、行を1件ずつ確認し続けず **キュー index を一度だけ再構築（`/api/queue?refresh=true`）** して最新キューで一気にジャンプする。通常時（スキップ少）は発動しないため負荷は増えない。
 - **応答順ガード（重要）**: `queueRows` を書き換える非同期処理（`loadQueue` / 保存応答）は世代カウンタ `queueWriteSeqRef` で管理し、**後発の書込のみ採用**。これにより、進捗フィルタ切替・作業者/インデックス変更・キュー再読込で `/api/queue` が短時間に複数飛んだ際に、**古い応答が後着で `queueRows` を上書きし、フィルタ設定と食い違う**不具合を防ぐ。
@@ -57,16 +66,16 @@
 
 設定の保持: ブラウザの **localStorage**（キー `wikiWorkNext`）に保存（端末/ブラウザ単位。サーバー側の個人別保存はなし）。初回（localStorage 無し）の既定（`defaultOptions`）は **作業者名=「全件表示」/ 表示する行=「完了を除く」/ 表示する列=「要確認（DeweyIDなし）」（=Entity値あり かつ DeweyID 未付与）**。旧バージョンの `skipDone` / `onlyNotStarted`（2 boolean）が保存されている場合は `loadStoredOptions` が `statusFilter` へ移行する（`onlyNotStarted`→`notStarted` / `skipDone=false`→`all` / それ以外→`incomplete`）。なお `indexRows`（シート全行をカバーするための取得上限）は **UI から編集せず、`.env.local` の `DEFAULT_INDEX_ROWS`（未設定なら 30000）をサーバー既定として正とする**。bootstrap 時に localStorage の値はサーバー既定へ合わせて上書きされる（古い小さい値での取り込み漏れ防止／値変更の即時反映）。
 
-行の復元: **最後に開いていた行**を別キー **`wikiWorkLastRow`** に保存し、次回起動（リロード）時に復元する。初回のキュー構築時に一度だけ適用し、**その行が現在のキューに含まれる場合のみ**復元（含まれない＝進捗フィルタ等で対象外なら従来どおり先頭行から開始）。作業者変更などその後の再読込では効かない。
+行の復元: **最後に開いていた行**を別キー **`wikiWorkLastRow`**（`シートID#行番号` 形式）に保存し、次回起動（リロード）時に復元する。初回のキュー構築時に一度だけ適用し、**その行（シート＋行番号）が現在のキューに含まれる場合のみ**復元（含まれない＝進捗フィルタ等で対象外なら従来どおり先頭行から開始）。作業者変更などその後の再読込では効かない。
 
-設定 UI は上から「表示する行（進捗）」（ドロップダウン3択: すべて / 完了を除く / 未着手のみ）「表示する列」（ドロップダウン4択: Entity値あり / 要確認（DeweyIDなし）/ 編集（AN〜GU）/ すべて）の順。行・列ともに**択一のドロップダウン**で、見出しを対称にしつつ縦の長さを抑える（スマホ配慮）。
+設定 UI は上から「表示する行（進捗）」（ドロップダウン3択: すべて / 完了を除く / 未着手のみ）「表示する列」（ドロップダウン4択: Entity値あり / 要確認（DeweyIDなし）/ 編集（三つ組＋memo＋役割列）/ すべて）の順。行・列ともに**択一のドロップダウン**で、見出しを対称にしつつ縦の長さを抑える（スマホ配慮）。
 
 **表示する行を変更した直後の挙動**: フィルタ切替時もキューは再読込されるが、**今の行の表示はそのまま維持**される（`loadQueue` の位置維持分岐。現在行が新キューに含まれなければキュー番号は更新されない）。次の行/前の行へ移動すると、移動先のライブ status で `shouldSkipLiveRow` 判定が効き、絞り込みが反映される。ヘルプ（？）にも同旨を明記。
 
 | UI 項目 | 既定 | 意味 |
 |------------|------|------|
 | 表示する行（進捗）（`statusFilter`） | 完了を除く | 3択。**すべて**=絞り込みなし / **完了を除く**=完了系（`完了` / `完了（正規化変更）`）を除外 / **未着手のみ**=「未着手」（空欄含む）の行だけ（要確認・完了系も除外） |
-| 表示する列 | 要確認（DeweyIDなし） | 4択。**Entity値あり**=名称有の三つ組セット（DeweyID 有無を問わず）/ **要確認（DeweyIDなし）**=名称有 かつ DeweyID 未付与（空/`-`）の三つ組のみ / **編集（AN〜GU）**=下記の全列編集モード / **すべて**=AC 以降の全列（フィルタなし） |
+| 表示する列 | 要確認（DeweyIDなし） | 4択。**Entity値あり**=名称有の三つ組セット（DeweyID 有無を問わず）/ **要確認（DeweyIDなし）**=名称有 かつ DeweyID 未付与（空/`-`）の三つ組のみ / **編集（三つ組＋memo＋役割列）**=下記の全列編集モード / **すべて**=AC 以降の全列（フィルタなし） |
 
 UI の選択値（`ColumnMode`）は内部フラグへ次のように対応（`src/components/WorkApp.tsx` の `COLUMN_MODE_FLAGS`）。リスト表示順は Entity値あり → 要確認 → 編集 → すべて:
 
@@ -74,7 +83,7 @@ UI の選択値（`ColumnMode`）は内部フラグへ次のように対応（`s
 |---|---|---|---|---|
 | Entity値あり | false | true | false | 名称有の三つ組セット（Wiki=`-`・deweyID 有無を問わず全部） |
 | 要確認（DeweyIDなし・既定） | false | false | true | 名称有 **かつ DeweyID 無（空/`-`）** の三つ組セットのみ（DeweyID 有り＝確認不要を除外） |
-| 編集（AN〜GU） | true | false | false | 下記「列表示・編集モード」 |
+| 編集（三つ組＋memo＋役割列） | true | false | false | 下記「列表示・編集モード」 |
 | すべて | false | false | false | 全列表示（AC 以降の全列をフィルタなしで表示。空列・三つ組も全部、memo/status 補完なし） |
 
 ### 名称三つ組 表示モード（`showNamedTriplets`）
@@ -88,22 +97,18 @@ UI の選択値（`ColumnMode`）は内部フラグへ次のように対応（`s
 
 ### 列表示・編集モード（`fullEditMode`）
 
-第二弾レイアウト（各三つ組に deweyID 列が挿入され末尾が **GU** まで拡張）に対応。Wiki 三つ組は **4列セット（名称 / deweyID / Wiki / 正しいwiki）** として表示・編集する。
+**構造ベースで再定義**（レター固定を廃止）。シートごとに `buildSheetRules` が表示・編集範囲を算出するため、第一二弾・第三弾の列数/命名差を自動吸収する。Wiki 三つ組は **4列セット（名称 / deweyID / Wiki / 正しいwiki）** として表示・編集する。
 
-- 表示: 先頭固定列 + **AN〜GU** の全列（値・水色・Wiki ルールを無視して必ず表示）。memo フィルタ・Wiki 三つ組の追加/除外も適用しない。
-  - ただし `FULL_EDIT_HIDDEN_RANGES` の **ヘルパー列**（集約名 / `_auto` / `_lang` / `Entity数` / `wiki結合`）は範囲内でも非表示: BU〜CD / DH〜DQ / EM〜EV / GH〜GI / GL / GN / GP / GR / GT。
-  - 結果: 4グループ（Agent / Patient-Theme / Place / Territory）の全三つ組4列セット・各 memo・Status・Assignee・役割列（Action〜Purpose）が表示される。
-- 編集: **AN〜GI** と **GM〜GU** を自由入力テキストで編集可（`isFullEditableColIndex`）。deweyID 列も4列セットの一部として自由入力編集できる。
-  - **Status（GJ）はドロップダウン**、**Assignee（GK）は読取**。両者は編集レター範囲の外に置いて自由入力対象から除外（間の GH〜GI・GL は非表示ヘルパー）。
-  - 書込禁止列（`WRITE_DENYLIST_COL_LETTERS`、現状 AE）は範囲外につき影響なし。
-  - 非表示列は UI に出ないため編集されず、書き込まれない（編集レター範囲に含まれていても実害なし）。
-- 範囲定数: `FULL_EDIT_DISPLAY_RANGE`（AN/GU）/ `FULL_EDIT_COLUMN_RANGES`（AN-GI, GM-GU）/ `FULL_EDIT_HIDDEN_RANGES`（`src/lib/config.ts`）。
-- ⚠️ これらはレター固定のため、将来シート列が増減した場合は再生成が必要（通常モードは名前ベースで追従）。
+- 表示範囲（`SheetRules.fullDisplayIdx`）: `ENTITY_NAME` から **役割列（Action〜Probability）／担当列**の後端までのうち、**ヘルパー列を除いた**全列。ヘルパー列＝ヘッダーが `_lang` 終わり / `__auto` を含む / `〜数` / `wiki結合` / `wiki統合` / `_Category` を含む / 先頭 `_`（言語・メタ列）。
+  - 結果: 4グループ（Agent / Patient-Theme / Place / Territory）の全三つ組4列セット・各 memo・セクション見出し列・Status・Assignee・役割列が表示される。
+- 編集可（`SheetRules.fullEditableIdx`）: **三つ組4列（名称/deweyID/Wiki/正しいwiki）・memo・役割列・作業 Status**。
+  - **Status はドロップダウン**。セクション見出し列（`Agent` 等）・`ENTITY_NAME`・**担当列は文脈用に表示のみ**（編集不可）。
+  - 書込禁止列（`WRITE_DENYLIST_COL_LETTERS`、現状 AE）は書き込まない。ヘルパー列は表示されないため編集・書込対象にならない。
 
 #### 保存時の書き込み（`fullEditMode` ON）
 
-- 表示中かつ編集可（AN〜GI・GM〜GU、非表示列を除く）のセルに入力した値が、**自由入力テキスト**としてシートへ書き込まれる（`buildWritePlan` に `fullEditMode=true` を渡し、`isWritableColumn` が当該範囲を許可）。
-- Status（GJ）は従来通りドロップダウン値を書き込み。Assignee（GK）・非表示ヘルパー列・AE は書き込まない。
+- 表示中かつ編集可のセルに入力した値が、**自由入力テキスト**としてシートへ書き込まれる（`buildWritePlan` に `fullEditMode=true` を渡し、`isWritableColumn` が `fullEditableIdx` を許可）。
+- Status は従来通りドロップダウン値を書き込み。担当列・ヘルパー列・AE は書き込まない。
 - 保存契機・UI は通常モードと同じ（移動操作に連動した自動保存。「編集・保存」参照）。
 
 ### 列抽出ルール（`shouldIncludeWorkColumn`）
@@ -117,7 +122,7 @@ UI の選択値（`ColumnMode`）は内部フラグへ次のように対応（`s
 | 名称有・deweyID 無（空/`-`） | 3列セット表示 | 3列セット表示 |
 
 - セットで表示する場合、空セルの列も含めて3列（名称/Wiki/正しいwiki）とも表示する（deweyID 列は表示しない）。
-- deweyID 有無の判定は `tripletDeweyHasValue`（`WIKI_DEWEY_BY_NAME` で名称列→deweyID 列を対応付け。値が空または `-` は「無し」扱い）。
+- deweyID 有無の判定は `tripletDeweyHasValue`（`SheetRules.deweyByName` で名称列→deweyID 列を対応付け。値が空または `-` は「無し」扱い）。
 - 非三つ組列: memo は非表示（後段 `filterMemoDisplayColumns` でセクションに応じ追加）。`lightBlueOnly` ON の非水色列は非表示。その他はセルに値があれば表示。
 
 → つまり **「deweyID有りを除く」=「Entity値有り」から deweyID に値がある三つ組（同定済み＝判断不要）を除いたもの**。
@@ -133,7 +138,7 @@ UI の選択値（`ColumnMode`）は内部フラグへ次のように対応（`s
 - **自動保存（移動操作に連動）**: `前の行` / `開く` / `次の行` のいずれを押しても、**未保存の変更があれば移動前に自動保存**する。明示的な保存ボタンは無し（操作感はスプレッドシート的）。
   - **dirty 判定**: 読込時の値スナップショット（`originalEdits`）と現在の `edits` を比較。**差分が無ければ書き込まない**（API も呼ばない）ため、書き込み回数は「移動回数」ではなく「実際に編集した行数」に比例＝負荷を抑制。
   - **保存失敗時は移動を中止**しエラー表示・編集は保持（古いトークン等での取りこぼし防止）。
-  - 保存後は最新キュー（`SaveResult.queueSheetRows`）でクライアントの基準を更新。`次の行`は現在行より後ろの最初のキュー行へ、末尾なら「キューの末尾です。」。
+  - 保存後は最新の通しキュー（`SaveResult.queue`）でクライアントの基準を更新。`次の行`は通しキュー上の次の位置へ、末尾なら「キューの末尾です。」。
 - **設定変更時も自動保存**: 進捗フィルタ/作業者の変更（キュー再読込）や、表示モード切替（`applyDisplayOptions`）でも、**現在行を再読込する前に未保存編集を自動保存**する。これがないと再読込で `edits` が保存値に戻り、未保存の Status 変更等が失われる（保存失敗時は再読込せず編集を保持・選択は巻き戻さない）。
 - **背景化・離脱時の保存**: タブ非表示化（`visibilitychange=hidden`）で未保存があれば `fetch(keepalive)` で保存（成功で clean 化）。離脱（`pagehide`）では `navigator.sendBeacon` で最後の保存（ベストエフォート）。hidden 時に保存済みなら beacon は dirty 無しでスキップ。
   - 限界: クラッシュ／強制終了／オフライン等では `pagehide` が届かないことがある。hidden 時保存を一次手段、beacon を保険とする二段構え。
@@ -157,13 +162,14 @@ UI の選択値（`ColumnMode`）は内部フラグへ次のように対応（`s
 
 #### 横スクロール位置のリセット
 
-作業表の横スクロール領域（`.outer`）は、**表示行が切り替わると先頭（左端）へ自動リセット**する。`WorkRowTable` に `rowKey`（＝表示中シート行番号）を渡し、変化時に `scrollLeft = 0`。
+作業表の横スクロール領域（`.outer`）は、**表示行が切り替わると先頭（左端）へ自動リセット**する。`WorkRowTable` に `rowKey`（＝`シートID#行番号`）を渡し、変化時に `scrollLeft = 0`。シートを跨いで同じ行番号へ移っても確実に発火する。
 
 ## 正しいWiki 補完機能（`WikiCorrectInput` + `/api/wiki-history`）
 
 正しいwiki セルの入力時に、過去の確定値を候補表示する補完機能。
 
-- **候補の生成元**: 作業シートを走査し、`名称 + Wiki` がある三つ組について正しいwiki の値を集計（`aggregateWikiHistory`）。候補対象は **URL** / **`-`（該当なし）** / **空欄（=Wiki欄変更不要のため入力なし、ただし作業 Status 完了行かつ deweyID 未付与のみ）** の3種。同一 `名称/Wiki/正しいwiki` は件数を加算。インデックス行数は `indexRows`。詳細は `docs/WIKI_HISTORY.md`。
+- **候補の生成元**: 各作業シートを走査し、`名称 + Wiki` がある三つ組について正しいwiki の値を集計（`aggregateWikiHistory`）。候補対象は **URL** / **`-`（該当なし）** / **空欄（=Wiki欄変更不要のため入力なし、ただし作業 Status 完了行かつ deweyID 未付与のみ）** の3種。同一 `名称/Wiki/正しいwiki` は件数を加算。インデックス行数は `indexRows`。詳細は `docs/WIKI_HISTORY.md`。
+- **シート横断の合算**: 候補は **全シートの履歴を合算**して提示する（`combineWikiHistories` で同一 `名称/Wiki/正しいwiki` の件数を足し合わせ、`suggestWikiHistory` に渡す）。第一二弾で確定した正解は第三弾でも候補に出る（逆も同様）。
 - **候補の絞り込み**（`suggestWikiHistory`）: 編集中セルの行の `名称`（必要に応じ `Wiki`）をキーに照合。
   - `exact`（name+wiki 一致）を優先、続いて `name のみ一致`。各々 件数降順、最大 8 件。
   - 入力中テキストでさらに部分一致フィルタ（250ms デバウンス）。
@@ -174,6 +180,7 @@ UI の選択値（`ColumnMode`）は内部フラグへ次のように対応（`s
 
 - 「アサイン」シートの `discord名` 列（2 行目以降）から重複を除いて取得。
 - 集計ラベルは除外（`ASSIGN_NAME_EXCLUDE`、現状「合計」「端数チェック（総件数との差）」）。
+- **シート上の実在担当名の追加**（`extraAssignees`）: シートによって同一人物の Assignee 表記が異なる場合（例: 第一二弾＝「けにち」/ 第三弾＝「mnmzwkenichi」）に対応するため、各作業シートの Assignee 列に実在する担当名のうち **アサインシートに無いもの**を収集し、ドロップダウン末尾の optgroup「その他（シート上の担当名）」に追加する（`collectExtraAssignees`、bootstrap 時にキュー index から算出＝シート無加工）。実在名を選べば当該シートの担当行が対象になる（別表記の人はシートごとに選び替える運用）。作業者の既定補完・有効判定は `discordNames + extraAssignees` を対象にする。
 - 作業者名の選択は **キューの担当フィルタ**であり、通常は選択値と Assignee が一致する行のみが対象。
 - 特別値 **「全件表示」**（`ASSIGN_ALL_ROWS_NAME`。シート上のラベル「全体」=`ASSIGN_ALL_ROWS_SHEET_LABEL` を変換）を選ぶと **Assignee で絞らず全行**をキューにする（進捗フィルタは引き続き適用）。この場合、行指定で開く際の担当ガードも無効。
 
@@ -194,6 +201,8 @@ UI の選択値（`ColumnMode`）は内部フラグへ次のように対応（`s
 
 | 内容 | パス |
 |------|------|
+| シート定義（複数シート） | `src/lib/config.ts`（`WORK_SHEETS`） |
+| 列ルールの構造検出 | `src/lib/sheet-rules.ts`（`buildSheetRules`） |
 | 列ルール | `src/lib/columns.ts` |
 | Sheets API | `src/lib/sheets.ts`, `src/lib/work-service.ts` |
 | 認証・トークン更新 | `src/auth.ts`, `src/lib/google-session.ts`, `src/lib/api-error.ts` |

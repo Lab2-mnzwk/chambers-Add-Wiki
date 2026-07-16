@@ -334,6 +334,17 @@
   font-size: 14px;
 }
 
+.jumpSheet {
+  flex: 0 0 auto;
+  max-width: 40%;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-panel);
+  border-radius: 8px;
+  padding: 10px 8px;
+  font-size: 14px;
+}
+
 .navOpen {
   flex: 0 0 auto;
   min-width: 72px;
