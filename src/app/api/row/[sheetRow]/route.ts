@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiErrorResponse } from "@/lib/api-error";
-import { getRow } from "@/lib/work-service";
+import { getRow, getRowProbe } from "@/lib/work-service";
 
 export async function GET(
   request: NextRequest,
@@ -13,6 +13,10 @@ export async function GET(
       return NextResponse.json({ error: "Invalid row number" }, { status: 400 });
     }
     const sheet = request.nextUrl.searchParams.get("sheet") ?? "";
+    if (request.nextUrl.searchParams.get("probe") === "true") {
+      const payload = await getRowProbe(sheet, sheetRowNumber);
+      return NextResponse.json(payload);
+    }
     const lightBlueOnly =
       request.nextUrl.searchParams.get("lightBlueOnly") !== "false";
     const fullEditMode =

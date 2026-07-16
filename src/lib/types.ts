@@ -111,6 +111,13 @@ export type RowPayload = {
   columns: ColumnPayload[];
 };
 
+/** 移動探索用の軽量応答（作業 Status のみ。行全体は取得しない）。 */
+export type RowProbePayload = {
+  sheet: string;
+  sheetRowNumber: number;
+  status: string;
+};
+
 export type SheetInfo = {
   id: string;
   label: string;

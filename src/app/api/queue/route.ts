@@ -24,7 +24,12 @@ export async function GET(request: NextRequest) {
   try {
     const options = parseOptions(request.nextUrl.searchParams);
     const forceRefresh = request.nextUrl.searchParams.get("refresh") === "true";
-    const queue = await getQueue(options, forceRefresh);
+    const refreshSheets = request.nextUrl.searchParams
+      .get("sheet")
+      ?.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const queue = await getQueue(options, forceRefresh, refreshSheets);
     return NextResponse.json({ queue });
   } catch (e) {
     return apiErrorResponse(e);

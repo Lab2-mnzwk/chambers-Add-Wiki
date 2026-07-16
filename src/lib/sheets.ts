@@ -296,6 +296,24 @@ export async function fetchWikiHistoryFromSheet(
   return results;
 }
 
+/** 作業 Status 列の1セルのみ取得（移動探索用）。 */
+export async function fetchRowStatus(
+  sheet: SheetConfig,
+  rules: SheetRules,
+  sheetRowNumber: number
+): Promise<string> {
+  if (!rules.statusUnique) return "";
+  const idx = rules.uniqueHeaders.indexOf(rules.statusUnique);
+  if (idx < 0) return "";
+  const sheets = await getSheets();
+  const letter = columnLetter(idx + 1);
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `'${sheet.name}'!${letter}${sheetRowNumber}:${letter}${sheetRowNumber}`,
+  });
+  return String(resp.data.values?.[0]?.[0] ?? "").trim();
+}
+
 export async function fetchRowValues(
   sheet: SheetConfig,
   structure: SheetStructure,

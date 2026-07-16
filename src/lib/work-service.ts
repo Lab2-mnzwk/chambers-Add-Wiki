@@ -25,6 +25,7 @@ import { buildSheetRules } from "./sheet-rules";
 import {
   executeWritePlan,
   fetchQueueIndex,
+  fetchRowStatus,
   fetchRowValues,
   fetchWikiHistoryFromSheet,
   loadAssignDiscordNames,
@@ -40,18 +41,18 @@ import {
   hasQueueIndex,
   hasWikiHistory,
   loadQueueIndex,
-  patchQueueIndex,
   patchRowValues,
   saveQueueIndex,
-  saveRowValues,
   saveWikiHistory,
   setStructure,
   touchLastAccessAt,
+  withBundle,
 } from "./store";
 import type {
   BootstrapPayload,
   QueueEntry,
   RowPayload,
+  RowProbePayload,
   SavePayload,
   SaveResult,
   SheetRules,
@@ -79,8 +80,12 @@ function clearCacheIfIdle(now: number = Date.now()): void {
   }
   if (latest !== null && now - latest >= IDLE_CACHE_CLEAR_MS) {
     clearAllCaches();
+    rulesCache.clear();
   }
 }
+
+/** シートごとの SheetRules（structure 不変の間は再利用）。 */
+const rulesCache = new Map<string, SheetRules>();
 
 async function ensureStructure(sheet: SheetConfig): Promise<SheetStructure> {
   let structure = getStructure(sheet.id);
@@ -92,7 +97,12 @@ async function ensureStructure(sheet: SheetConfig): Promise<SheetStructure> {
 }
 
 function rulesFor(sheet: SheetConfig, structure: SheetStructure): SheetRules {
-  return buildSheetRules(structure, sheet.assigneeHeader);
+  const key = structure.rawHeaders.join("\0");
+  const cached = rulesCache.get(sheet.id);
+  if (cached && cached.rawHeaders.join("\0") === key) return cached;
+  const rules = buildSheetRules(structure, sheet.assigneeHeader);
+  rulesCache.set(sheet.id, rules);
+  return rules;
 }
 
 async function ensureQueueIndex(
@@ -226,12 +236,16 @@ export async function getBootstrap(): Promise<BootstrapPayload> {
 /** 全シートを通した統合キュー（第一二弾 → 第三弾の順）。 */
 export async function getQueue(
   options: WorkOptions,
-  forceRefresh = false
+  forceRefresh = false,
+  refreshSheets?: string[]
 ): Promise<QueueEntry[]> {
   const result: QueueEntry[] = [];
   for (const sheet of WORK_SHEETS) {
+    const doRefresh =
+      forceRefresh &&
+      (!refreshSheets?.length || refreshSheets.includes(sheet.id));
     touchLastAccessAt(sheet.id);
-    const records = await ensureQueueIndex(sheet, options.indexRows, forceRefresh);
+    const records = await ensureQueueIndex(sheet, options.indexRows, doRefresh);
     const rows = filterQueueRows(records, options);
     for (const row of rows) result.push({ sheet: sheet.id, row });
   }
@@ -256,19 +270,40 @@ function recomputeQueueAfterSave(
   return result;
 }
 
+export async function getRowProbe(
+  sheetId: string,
+  sheetRowNumber: number
+): Promise<RowProbePayload> {
+  const sheet = getSheetById(sheetId) ?? DEFAULT_SHEET;
+  const structure = await ensureStructure(sheet);
+  const rules = rulesFor(sheet, structure);
+  const status = await fetchRowStatus(sheet, rules, sheetRowNumber);
+
+  withBundle(sheet.id, (bundle) => {
+    bundle.lastAccessAt = Date.now();
+    if (status) {
+      const row = bundle.queueIndex.find(
+        (r) => r.sheetRowNumber === sheetRowNumber
+      );
+      if (row) row.status = status;
+    }
+  });
+
+  return { sheet: sheet.id, sheetRowNumber, status };
+}
+
 export async function getRow(
   sheetId: string,
   sheetRowNumber: number,
   options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode" | "showNamedTriplets">
 ): Promise<RowPayload> {
   const sheet = getSheetById(sheetId) ?? DEFAULT_SHEET;
-  touchLastAccessAt(sheet.id);
   const structure = await ensureStructure(sheet);
   const rules = rulesFor(sheet, structure);
+
   let rowValues = getRowValues(sheet.id, sheetRowNumber);
   if (!rowValues) {
     rowValues = await fetchRowValues(sheet, structure, sheetRowNumber);
-    saveRowValues(sheet.id, sheetRowNumber, rowValues);
   }
 
   const rowByUnique = rowByUniqueFromValues(rules.uniqueHeaders, rowValues);
@@ -280,11 +315,18 @@ export async function getRow(
     options
   );
 
-  // 自己修復: 開いた行のライブ status をキュー index キャッシュへ反映する。
-  const statusValue = payload.columns.find((c) => c.isStatus)?.value;
-  if (statusValue) {
-    patchQueueIndex(sheet.id, sheetRowNumber, statusValue, "");
-  }
+  const statusValue = payload.columns.find((c) => c.isStatus)?.value ?? "";
+
+  withBundle(sheet.id, (bundle) => {
+    bundle.lastAccessAt = Date.now();
+    bundle.rows[String(sheetRowNumber)] = rowValues;
+    if (statusValue) {
+      const row = bundle.queueIndex.find(
+        (r) => r.sheetRowNumber === sheetRowNumber
+      );
+      if (row) row.status = statusValue;
+    }
+  });
 
   return payload;
 }
@@ -339,7 +381,12 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
 
   const statusUnique = rowPayload.columns.find((c) => c.isStatus)?.uniqueName;
   if (statusUnique && updates[statusUnique] !== undefined) {
-    patchQueueIndex(sheet.id, payload.sheetRowNumber, updates[statusUnique], "");
+    withBundle(sheet.id, (bundle) => {
+      const row = bundle.queueIndex.find(
+        (r) => r.sheetRowNumber === payload.sheetRowNumber
+      );
+      if (row) row.status = updates[statusUnique];
+    });
   }
 
   const queue = recomputeQueueAfterSave(payload.options, payload.queue);
@@ -349,6 +396,7 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
 
 export async function refreshCache(): Promise<void> {
   clearAllCaches();
+  rulesCache.clear();
   for (const sheet of WORK_SHEETS) {
     const structure = await loadSheetStructure(sheet);
     setStructure(sheet.id, structure);

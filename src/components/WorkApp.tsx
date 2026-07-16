@@ -9,6 +9,7 @@ import type {
   BootstrapPayload,
   QueueEntry,
   RowPayload,
+  RowProbePayload,
   WorkOptions,
 } from "@/lib/types";
 import { applyTheme, loadThemeMode, type ThemeMode } from "@/lib/theme";
@@ -363,13 +364,9 @@ export function WorkApp() {
     localStorage.setItem(PREFS_KEY, JSON.stringify(next));
   }, []);
 
-  const rowStatusOf = (payload: RowPayload): string =>
-    payload.columns.find((c) => c.isStatus)?.value ?? "";
-
-  const shouldSkipLiveRow = (payload: RowPayload): boolean => {
-    const s = rowStatusOf(payload);
-    if (options.statusFilter === "incomplete") return isDoneStatus(s);
-    if (options.statusFilter === "notStarted") return s !== STATUS_NOT_STARTED;
+  const shouldSkipLiveStatus = (status: string): boolean => {
+    if (options.statusFilter === "incomplete") return isDoneStatus(status);
+    if (options.statusFilter === "notStarted") return status !== STATUS_NOT_STARTED;
     return false;
   };
 
@@ -382,7 +379,19 @@ export function WorkApp() {
     setOriginalEdits(next);
   };
 
-  // 表示状態を変えずに行データだけ取得する（移動時の探索用＝途中行を描画しない）。
+  // 探索時は Status 列のみ取得（行全体は着地時だけ）。
+  const fetchRowProbe = useCallback(
+    async (entry: QueueEntry): Promise<RowProbePayload> => {
+      const res = await fetch(
+        `/api/row/${entry.row}?sheet=${encodeURIComponent(entry.sheet)}&probe=true`
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "行の確認に失敗");
+      return data as RowProbePayload;
+    },
+    []
+  );
+
   const fetchRowPayload = useCallback(
     async (entry: QueueEntry, opts: WorkOptions): Promise<RowPayload> => {
       const res = await fetch(`/api/row/${entry.row}?${rowQuery(entry.sheet, opts)}`);
@@ -617,32 +626,27 @@ export function WorkApp() {
   };
 
   /**
-   * 移動前のキュー取得。進捗フィルタが「すべて」のときはサーバーから再取得し、
-   * 以前の絞り込みでクライアント側から除外された行を復元する。
+   * 移動前の保存。キューはフィルタ切替・保存応答・手動再読込・大量スキップ時に更新する。
    */
   const resolveNavigationQueue = async (): Promise<{
     ok: boolean;
     queueRows: QueueEntry[];
   }> => {
-    const saved = await saveCurrentIfDirty();
-    if (!saved.ok) return saved;
-    if (options.statusFilter !== "all") return saved;
-
-    const res = await fetch(`/api/queue?${optionsQuery(options)}`);
-    const data = await res.json();
-    if (!res.ok) {
-      setMessage(String(data.error ?? "キューの読み込みに失敗"), "error");
-      return { ok: false, queueRows: saved.queueRows };
-    }
-    const rows = (data.queue ?? []) as QueueEntry[];
-    setQueueRows(rows);
-    return { ok: true, queueRows: rows };
+    return saveCurrentIfDirty();
   };
 
-  // 大量スキップ時の負荷軽減: サーバーでキュー index を1回だけ再構築して最新キューを取得。
-  const refreshQueueRows = async (): Promise<QueueEntry[] | null> => {
+  // 大量スキップ時: スキップが発生したシートだけ index を再構築する。
+  const refreshQueueRows = async (
+    sheets?: string[]
+  ): Promise<QueueEntry[] | null> => {
     try {
-      const res = await fetch(`/api/queue?${optionsQuery(options)}&refresh=true`);
+      const sheetParam =
+        sheets && sheets.length
+          ? `&sheet=${sheets.map(encodeURIComponent).join(",")}`
+          : "";
+      const res = await fetch(
+        `/api/queue?${optionsQuery(options)}&refresh=true${sheetParam}`
+      );
       const data = await res.json();
       if (!res.ok) return null;
       const rows = (data.queue ?? []) as QueueEntry[];
@@ -666,6 +670,7 @@ export function WorkApp() {
       if (dir === "prev" && ci < 0) ci = q.length;
       let skipped = 0;
       let refreshed = false;
+      const refreshTargets = new Set<string>();
       setMessage(dir === "next" ? "次の対象行を探索中…" : "前の対象行を探索中…");
       while (true) {
         ci = dir === "next" ? ci + 1 : ci - 1;
@@ -681,22 +686,29 @@ export function WorkApp() {
           return;
         }
         const cand = q[ci];
-        const payload = await fetchRowPayload(cand, options);
-        if (shouldSkipLiveRow(payload)) {
-          removed.add(entryKey(cand));
-          skipped += 1;
-          if (!refreshed && skipped >= NAV_REFRESH_SKIP_THRESHOLD) {
-            refreshed = true;
-            const r = await refreshQueueRows();
-            if (r) {
-              q = r;
-              removed.clear();
-              ci = indexOfEntry(q, currentEntry);
-              if (dir === "prev" && ci < 0) ci = q.length;
+
+        if (options.statusFilter !== "all") {
+          const probe = await fetchRowProbe(cand);
+          if (shouldSkipLiveStatus(probe.status)) {
+            removed.add(entryKey(cand));
+            refreshTargets.add(cand.sheet);
+            skipped += 1;
+            if (!refreshed && skipped >= NAV_REFRESH_SKIP_THRESHOLD) {
+              refreshed = true;
+              const r = await refreshQueueRows([...refreshTargets]);
+              if (r) {
+                q = r;
+                removed.clear();
+                refreshTargets.clear();
+                ci = indexOfEntry(q, currentEntry);
+                if (dir === "prev" && ci < 0) ci = q.length;
+              }
             }
+            continue;
           }
-          continue;
         }
+
+        const payload = await fetchRowPayload(cand, options);
         // 着地: ここで初めて描画する。
         const finalQ = q.filter((e) => !removed.has(entryKey(e)));
         setRowPayload(payload);

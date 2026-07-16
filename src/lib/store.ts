@@ -70,6 +70,17 @@ function writeBundle(sheetId: string, bundle: CacheBundle): void {
   fs.writeFileSync(cacheFile(sheetId), JSON.stringify(bundle));
 }
 
+/** 1 回の read/write で bundle を更新する（getRow / probe 等の複数パッチを統合）。 */
+export function withBundle<T>(
+  sheetId: string,
+  fn: (bundle: CacheBundle) => T
+): T {
+  const bundle = readBundle(sheetId);
+  const result = fn(bundle);
+  writeBundle(sheetId, bundle);
+  return result;
+}
+
 export function clearCache(sheetId: string): void {
   const file = cacheFile(sheetId);
   if (fs.existsSync(file)) fs.unlinkSync(file);
