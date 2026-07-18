@@ -25,6 +25,7 @@ export function WikiCorrectInput({
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [menuPos, setMenuPos] = useState<{
     top: number;
     left: number;
@@ -50,6 +51,7 @@ export function WikiCorrectInput({
     async (query: string): Promise<WikiHistorySuggestion[]> => {
       if (!tripletName.trim()) {
         setSuggestions([]);
+        setLoaded(true);
         return [];
       }
       setLoading(true);
@@ -67,6 +69,7 @@ export function WikiCorrectInput({
         };
         const list = data.suggestions ?? [];
         setSuggestions(list);
+        setLoaded(true);
         return list;
       } finally {
         setLoading(false);
@@ -91,20 +94,13 @@ export function WikiCorrectInput({
     };
   }, []);
 
-  // 行表示時（三つ組が変わったら）に候補を先読みする（fetchSuggestions は
-  // tripletName / tripletWiki / indexRows が変わると再生成される）。
+  // 行表示時には取得しない。1行内の各入力欄から候補APIが同時発火すると、
+  // Vercel の別インスタンスで重い履歴構築が重複するため、操作時だけ取得する。
   useEffect(() => {
-    // 行表示・三つ組変更時は候補を先読みするが、ドロップダウンは開かない。
-    // 件数は欄内の「候補N件」バッジで示し、クリック/フォーカスで展開する（乱立防止）。
     setOpen(false);
-    if (!tripletName.trim()) {
-      setSuggestions([]);
-      return;
-    }
-    void fetchSuggestions(value);
-    // value は依存に含めない（入力中の再取得は onChange→scheduleFetch が担当）。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchSuggestions]);
+    setSuggestions([]);
+    setLoaded(false);
+  }, [tripletName, tripletWiki, indexRows]);
 
   // リンクプレビュー（タイトル）の取得はドロップダウンを開いた時のみ。
   // 先読みで全行・全候補のプレビューを大量取得しないようにする。
@@ -230,7 +226,20 @@ export function WikiCorrectInput({
         </div>
       )}
       {tripletName.trim() && !loading && !open && (
-        suggestions.length > 0 ? (
+        !loaded ? (
+          <button
+            type="button"
+            className={styles.badge}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              setOpen(true);
+              updateMenuPos();
+              void fetchSuggestions(value);
+            }}
+          >
+            候補を表示 ▾
+          </button>
+        ) : suggestions.length > 0 ? (
           <button
             type="button"
             className={styles.badge}

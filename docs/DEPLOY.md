@@ -39,6 +39,16 @@ git push origin main
 | `SPREADSHEET_ID` | `1Mc3pX949vlO_uxWpimn7_DsUAYr87GmroqXft6fvB4I` |
 | `ENABLE_SHEET_WRITES` | `true` |
 
+**共有キャッシュ（推奨）** — Vercel Marketplace で Upstash Redis / Redis互換KVを接続
+
+| Name | Value |
+|------|-------|
+| `KV_REST_API_URL` | Redis REST URL |
+| `KV_REST_API_TOKEN` | Redis REST Token |
+
+Upstash名で連携される場合は `UPSTASH_REDIS_REST_URL` /
+`UPSTASH_REDIS_REST_TOKEN` でも動作します。未設定時は従来どおり `/tmp` へフォールバックします。
+
 6. **Deploy**
 
 ## 3. 作業者への共有
@@ -49,7 +59,7 @@ git push origin main
 
 ## 注意
 
-- Vercel 上のファイルキャッシュは `/tmp` に保存され、インスタンス間では共有されません（429 対策は弱くなります）
+- Redis REST未設定時、Vercel上のファイルキャッシュは `/tmp` に保存され、インスタンス間では共有されません
 - ローカル開発: `npm run dev` → http://localhost:3010
 - 認証ファイルは `service_account.json`（ルート、gitignore 済み）または `.env.local`
 

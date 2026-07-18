@@ -664,6 +664,25 @@ export function buildRowPayload(
   const eventName = isCellEmpty(rowByUnique["ENTITY_NAME"])
     ? ""
     : String(rowByUnique["ENTITY_NAME"]).trim();
+  const wikiLearning = rules.triplets.flatMap((triplet) => {
+    const correctUniqueName = rules.headerMap[triplet.ok];
+    const nameUnique = rules.headerMap[triplet.name];
+    const wikiUnique = rules.headerMap[triplet.wiki];
+    if (!correctUniqueName || !nameUnique || !wikiUnique) return [];
+    const deweyUnique = triplet.dewey ? rules.headerMap[triplet.dewey] : undefined;
+    return [
+      {
+        correctUniqueName,
+        nameUniqueName: nameUnique,
+        wikiUniqueName: wikiUnique,
+        deweyUniqueName: deweyUnique ?? null,
+        name: String(rowByUnique[nameUnique] ?? ""),
+        wiki: String(rowByUnique[wikiUnique] ?? ""),
+        correctWiki: String(rowByUnique[correctUniqueName] ?? ""),
+        deweyHasValue: tripletDeweyHasValue(rules, triplet.name, rowByUnique),
+      },
+    ];
+  });
   return {
     sheet: sheet.id,
     sheetLabel: sheet.label,
@@ -672,5 +691,6 @@ export function buildRowPayload(
     eventName,
     assignee,
     columns: buildColumnPayload(rules, rowByUnique, workCols, fullEditMode),
+    wikiLearning,
   };
 }

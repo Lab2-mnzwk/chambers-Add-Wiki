@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiErrorResponse } from "@/lib/api-error";
+import { DEFAULT_INDEX_ROWS } from "@/lib/config";
 import { getQueue } from "@/lib/work-service";
-import type { WorkOptions } from "@/lib/types";
+import type { CompactQueue, WorkOptions } from "@/lib/types";
 
 function parseOptions(searchParams: URLSearchParams): WorkOptions {
   return {
@@ -16,7 +17,7 @@ function parseOptions(searchParams: URLSearchParams): WorkOptions {
     lightBlueOnly: searchParams.get("lightBlueOnly") !== "false",
     showNamedTriplets: searchParams.get("showNamedTriplets") === "true",
     fullEditMode: searchParams.get("fullEditMode") === "true",
-    indexRows: Number(searchParams.get("indexRows") ?? 10000),
+    indexRows: Number(searchParams.get("indexRows") ?? DEFAULT_INDEX_ROWS),
   };
 }
 
@@ -30,6 +31,16 @@ export async function GET(request: NextRequest) {
       .map((s) => s.trim())
       .filter(Boolean);
     const queue = await getQueue(options, forceRefresh, refreshSheets);
+    if (request.nextUrl.searchParams.get("compact") === "true") {
+      const bySheet = new Map<string, number[]>();
+      for (const entry of queue) {
+        const rows = bySheet.get(entry.sheet) ?? [];
+        rows.push(entry.row);
+        bySheet.set(entry.sheet, rows);
+      }
+      const queueCompact: CompactQueue = [...bySheet.entries()];
+      return NextResponse.json({ queueCompact });
+    }
     return NextResponse.json({ queue });
   } catch (e) {
     return apiErrorResponse(e);

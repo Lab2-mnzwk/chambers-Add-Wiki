@@ -78,6 +78,9 @@ export type QueueEntry = {
   row: number;
 };
 
+/** API転送用の圧縮キュー。シートIDを行ごとに繰り返さない。 */
+export type CompactQueue = Array<[sheet: string, rows: number[]]>;
+
 export type ColumnPayload = {
   uniqueName: string;
   rawHeader: string;
@@ -100,6 +103,18 @@ export type ColumnPayload = {
   tripletDeweyHasValue: boolean;
 };
 
+/** 保存時のWiki候補学習に必要な最小スナップショット（行全体の再取得を避ける）。 */
+export type WikiLearningSnapshot = {
+  correctUniqueName: string;
+  nameUniqueName: string;
+  wikiUniqueName: string;
+  deweyUniqueName: string | null;
+  name: string;
+  wiki: string;
+  correctWiki: string;
+  deweyHasValue: boolean;
+};
+
 export type RowPayload = {
   sheet: string;
   sheetLabel: string;
@@ -109,6 +124,8 @@ export type RowPayload = {
   eventName: string;
   assignee: string;
   columns: ColumnPayload[];
+  /** 全三つ組の候補学習用データ。表示列とは独立して保持する。 */
+  wikiLearning: WikiLearningSnapshot[];
 };
 
 /** 移動探索用の軽量応答（作業 Status のみ。行全体は取得しない）。 */
@@ -160,14 +177,44 @@ export type BootstrapPayload = {
 export type SavePayload = {
   sheet: string;
   sheetRowNumber: number;
-  worker: string;
+  /** 読込時から実際に変化したセルだけ。 */
   edits: Record<string, string>;
-  queue: QueueEntry[];
-  options: WorkOptions;
+  wikiLearning: WikiLearningSnapshot[];
+  fullEditMode: boolean;
+  indexRows: number;
 };
 
 export type SaveResult = {
   savedCells: number;
-  /** patch 反映後のキャッシュから再計算した最新の通しキュー */
-  queue: QueueEntry[];
+  /** Status が今回更新された場合のみ、サーバーが受理した値を返す。 */
+  status?: string;
+};
+
+export type SaveMoveAction =
+  | {
+      kind: "navigate";
+      candidates: QueueEntry[];
+      statusFilter: WorkStatusFilter;
+      rowOptions: Pick<
+        WorkOptions,
+        "lightBlueOnly" | "fullEditMode" | "showNamedTriplets"
+      >;
+    }
+  | {
+      kind: "jump";
+      target: QueueEntry;
+      rowOptions: Pick<
+        WorkOptions,
+        "lightBlueOnly" | "fullEditMode" | "showNamedTriplets"
+      >;
+    };
+
+export type SaveMoveResponse = {
+  save:
+    | { ok: true; result: SaveResult }
+    | { ok: false; error: string };
+  move:
+    | { ok: true; kind: "navigate"; result: NavigateResult }
+    | { ok: true; kind: "jump"; result: RowPayload }
+    | { ok: false; kind: SaveMoveAction["kind"]; error: string };
 };

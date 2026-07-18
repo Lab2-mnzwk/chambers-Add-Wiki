@@ -1,5 +1,6 @@
 import fs from "fs";
-import { google, sheets_v4 } from "googleapis";
+import { AsyncLocalStorage } from "async_hooks";
+import { sign } from "crypto";
 import path from "path";
 import { isOAuthConfigured } from "@/auth";
 import {
@@ -22,7 +23,16 @@ import { requireGoogleAccessToken } from "./google-session";
 import type { SheetRules, SheetStructure } from "./types";
 import type { WikiHistoryRawRow } from "./wiki-history";
 
-let serviceAccountSheets: sheets_v4.Sheets | null = null;
+type GoogleValueRange = { range?: string; values?: unknown[][] };
+type GoogleBatchGetResponse = { valueRanges?: GoogleValueRange[] };
+type ServiceAccountCredentials = {
+  client_email?: string;
+  private_key?: string;
+  token_uri?: string;
+};
+
+let serviceTokenCache: { accessToken: string; expiresAt: number } | null = null;
+const requestAccessToken = new AsyncLocalStorage<string>();
 
 function getServiceAccountCredentials(): Record<string, unknown> {
   const json = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -56,44 +66,149 @@ export function hasServiceAccountCredentials(): boolean {
   return candidates.some((file) => fs.existsSync(file));
 }
 
-async function getSheets(): Promise<sheets_v4.Sheets> {
-  if (isOAuthConfigured()) {
-    const accessToken = await requireGoogleAccessToken();
-    const oauth2 = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET
+async function getServiceAccountAccessToken(): Promise<string> {
+  if (serviceTokenCache && Date.now() < serviceTokenCache.expiresAt - 60_000) {
+    return serviceTokenCache.accessToken;
+  }
+  const credentials = getServiceAccountCredentials() as ServiceAccountCredentials;
+  if (!credentials.client_email || !credentials.private_key) {
+    throw new Error("サービスアカウントの client_email / private_key が不足しています。");
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const tokenUri = credentials.token_uri ?? "https://oauth2.googleapis.com/token";
+  const encode = (value: object) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const unsigned = `${encode({ alg: "RS256", typ: "JWT" })}.${encode({
+    iss: credentials.client_email,
+    scope: "https://www.googleapis.com/auth/spreadsheets",
+    aud: tokenUri,
+    iat: now,
+    exp: now + 3600,
+  })}`;
+  const signature = sign(
+    "RSA-SHA256",
+    Buffer.from(unsigned),
+    credentials.private_key
+  ).toString("base64url");
+  const response = await fetch(tokenUri, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: `${unsigned}.${signature}`,
+    }),
+  });
+  const data = (await response.json()) as {
+    access_token?: string;
+    expires_in?: number;
+    error_description?: string;
+  };
+  if (!response.ok || !data.access_token) {
+    throw new Error(
+      `Googleサービスアカウント認証に失敗しました: ${
+        data.error_description ?? response.status
+      }`
     );
-    oauth2.setCredentials({ access_token: accessToken });
-    return google.sheets({ version: "v4", auth: oauth2 });
   }
+  serviceTokenCache = {
+    accessToken: data.access_token,
+    expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+  };
+  return data.access_token;
+}
 
-  if (!serviceAccountSheets) {
-    const auth = new google.auth.GoogleAuth({
-      credentials: getServiceAccountCredentials(),
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+async function getAccessToken(): Promise<string> {
+  return isOAuthConfigured()
+    ? requireGoogleAccessToken()
+    : getServiceAccountAccessToken();
+}
+
+/** 統合API内の並列Sheets操作で認証・Cookie/JWT解析を1回だけ共有する。 */
+export async function withSheetsAccessToken<T>(work: () => Promise<T>): Promise<T> {
+  const existing = requestAccessToken.getStore();
+  if (existing) return work();
+  const token = await getAccessToken();
+  return requestAccessToken.run(token, work);
+}
+
+async function sheetsFetch<T>(
+  pathAndQuery: string,
+  init: RequestInit = {},
+  accessToken?: string
+): Promise<T> {
+  const token =
+    accessToken ?? requestAccessToken.getStore() ?? (await getAccessToken());
+  let response: Response | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    response = await fetch(`https://sheets.googleapis.com/v4/${pathAndQuery}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...init.headers,
+      },
     });
-    serviceAccountSheets = google.sheets({ version: "v4", auth });
+    if (response.ok) return (await response.json()) as T;
+    if (![429, 503].includes(response.status) || attempt > 0) break;
+    const retryAfter = Number(response.headers.get("retry-after") ?? 0);
+    await new Promise((resolve) =>
+      setTimeout(resolve, retryAfter > 0 ? retryAfter * 1000 : 300 + Math.random() * 300)
+    );
   }
-  return serviceAccountSheets;
+  const text = await response!.text();
+  let message = text;
+  try {
+    const parsed = JSON.parse(text) as { error?: { message?: string } };
+    message = parsed.error?.message ?? text;
+  } catch {
+    // 非JSONエラーは本文をそのまま利用。
+  }
+  throw new Error(`Google Sheets API ${response!.status}: ${message}`);
+}
+
+function valuesPath(range: string): string {
+  return `spreadsheets/${SPREADSHEET_ID}/values/${encodeURIComponent(range)}`;
+}
+
+async function getValues(
+  range: string,
+  accessToken?: string
+): Promise<GoogleValueRange> {
+  return sheetsFetch<GoogleValueRange>(valuesPath(range), {}, accessToken);
+}
+
+async function batchGetValues(
+  ranges: string[],
+  accessToken?: string
+): Promise<GoogleBatchGetResponse> {
+  const query = new URLSearchParams();
+  for (const range of ranges) query.append("ranges", range);
+  return sheetsFetch<GoogleBatchGetResponse>(
+    `spreadsheets/${SPREADSHEET_ID}/values:batchGet?${query}`,
+    {},
+    accessToken
+  );
 }
 
 export async function loadSheetStructure(
   sheet: SheetConfig
 ): Promise<SheetStructure> {
-  const sheets = await getSheets();
-  const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
-  const title = meta.data.properties?.title ?? SPREADSHEET_ID;
-
-  const sheetMeta = meta.data.sheets?.find(
+  const accessToken = await getAccessToken();
+  const meta = await sheetsFetch<{
+    properties?: { title?: string };
+    sheets?: { properties?: { title?: string; gridProperties?: { columnCount?: number } } }[];
+  }>(
+    `spreadsheets/${SPREADSHEET_ID}?fields=properties.title,sheets.properties(title,gridProperties.columnCount)`,
+    {},
+    accessToken
+  );
+  const title = meta.properties?.title ?? SPREADSHEET_ID;
+  const sheetMeta = meta.sheets?.find(
     (s) => s.properties?.title === sheet.name
   );
   const colCount = sheetMeta?.properties?.gridProperties?.columnCount ?? 1;
-
-  const headerResp = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `'${sheet.name}'!1:1`,
-  });
-  const rawHeaders = (headerResp.data.values?.[0] ?? []).map((v) =>
+  const headerResp = await getValues(`'${sheet.name}'!1:1`, accessToken);
+  const rawHeaders = (headerResp.values?.[0] ?? []).map((v) =>
     String(v ?? "")
   );
   const uniqueHeaders = makeUniqueHeaders(rawHeaders);
@@ -102,24 +217,21 @@ export async function loadSheetStructure(
 }
 
 export async function loadAssignDiscordNames(): Promise<string[]> {
-  const sheets = await getSheets();
-  const headerResp = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `'${ASSIGN_SHEET_NAME}'!1:1`,
-  });
-  const headers = headerResp.data.values?.[0] ?? [];
+  const accessToken = await getAccessToken();
+  const headerResp = await getValues(`'${ASSIGN_SHEET_NAME}'!1:1`, accessToken);
+  const headers = headerResp.values?.[0] ?? [];
   const colIndex = headers.indexOf(DISCORD_NAME_COLUMN);
   if (colIndex < 0) return [];
 
   const colLetter = columnLetter(colIndex + 1);
-  const valuesResp = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `'${ASSIGN_SHEET_NAME}'!${colLetter}2:${colLetter}`,
-  });
+  const valuesResp = await getValues(
+    `'${ASSIGN_SHEET_NAME}'!${colLetter}2:${colLetter}`,
+    accessToken
+  );
   const excluded = new Set(ASSIGN_NAME_EXCLUDE);
   const seen = new Set<string>();
   const names: string[] = [];
-  for (const row of valuesResp.data.values ?? []) {
+  for (const row of valuesResp.values ?? []) {
     const raw = String(row[0] ?? "").trim();
     const name = raw === ASSIGN_ALL_ROWS_SHEET_LABEL ? ASSIGN_ALL_ROWS_NAME : raw;
     if (name && !seen.has(name) && !excluded.has(name)) {
@@ -137,7 +249,6 @@ export async function fetchQueueIndex(
 ): Promise<
   { sheetRowNumber: number; renban: string; status: string; assignee: string }[]
 > {
-  const sheets = await getSheets();
   const { uniqueHeaders } = rules;
   const startRow = 2;
   const endRow = indexRows + 1;
@@ -160,13 +271,10 @@ export async function fetchQueueIndex(
 
   if (!ranges.length) return [];
 
-  const batch = await sheets.spreadsheets.values.batchGet({
-    spreadsheetId: SPREADSHEET_ID,
-    ranges,
-  });
+  const batch = await batchGetValues(ranges);
 
   const colData: Record<string, string[]> = {};
-  (batch.data.valueRanges ?? []).forEach((vr, i) => {
+  (batch.valueRanges ?? []).forEach((vr, i) => {
     const flat = (vr.values ?? []).map((row) => String(row[0] ?? ""));
     colData[keys[i]] = flat;
   });
@@ -236,8 +344,6 @@ export async function fetchWikiHistoryFromSheet(
 
   if (!ranges.length) return [];
 
-  const sheets = await getSheets();
-
   // 「完了行で正しいWiki空欄 = Wiki欄変更不要」の判定用に作業 Status 列も読む。
   let statusRangeIndex = -1;
   if (rules.statusUnique) {
@@ -252,14 +358,12 @@ export async function fetchWikiHistoryFromSheet(
   // レンジ数 × 行数が大きいと単一 batchGet が応答過大・タイムアウトで 500 になるため、
   // レンジを分割して複数回 batchGet し、元の順序で valueRanges を結合する。
   const BATCH_RANGE_CHUNK = 20;
-  const valueRanges: sheets_v4.Schema$ValueRange[] = [];
+  const valueRanges: GoogleValueRange[] = [];
+  const accessToken = await getAccessToken();
   for (let i = 0; i < ranges.length; i += BATCH_RANGE_CHUNK) {
     const chunk = ranges.slice(i, i + BATCH_RANGE_CHUNK);
-    const batch = await sheets.spreadsheets.values.batchGet({
-      spreadsheetId: SPREADSHEET_ID,
-      ranges: chunk,
-    });
-    valueRanges.push(...(batch.data.valueRanges ?? []));
+    const batch = await batchGetValues(chunk, accessToken);
+    valueRanges.push(...(batch.valueRanges ?? []));
   }
 
   const colAt = (idx: number): string[] =>
@@ -305,13 +409,11 @@ export async function fetchRowStatus(
   if (!rules.statusUnique) return "";
   const idx = rules.uniqueHeaders.indexOf(rules.statusUnique);
   if (idx < 0) return "";
-  const sheets = await getSheets();
   const letter = columnLetter(idx + 1);
-  const resp = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `'${sheet.name}'!${letter}${sheetRowNumber}:${letter}${sheetRowNumber}`,
-  });
-  return String(resp.data.values?.[0]?.[0] ?? "").trim();
+  const resp = await getValues(
+    `'${sheet.name}'!${letter}${sheetRowNumber}:${letter}${sheetRowNumber}`
+  );
+  return String(resp.values?.[0]?.[0] ?? "").trim();
 }
 
 /**
@@ -328,19 +430,15 @@ export async function fetchRowStatuses(
   const idx = rules.uniqueHeaders.indexOf(rules.statusUnique);
   if (idx < 0) return result;
   const letter = columnLetter(idx + 1);
-  const sheets = await getSheets();
-
   const RANGE_CHUNK = 200;
+  const accessToken = await getAccessToken();
   for (let i = 0; i < rowNumbers.length; i += RANGE_CHUNK) {
     const chunk = rowNumbers.slice(i, i + RANGE_CHUNK);
     const ranges = chunk.map(
       (r) => `'${sheet.name}'!${letter}${r}:${letter}${r}`
     );
-    const batch = await sheets.spreadsheets.values.batchGet({
-      spreadsheetId: SPREADSHEET_ID,
-      ranges,
-    });
-    (batch.data.valueRanges ?? []).forEach((vr, j) => {
+    const batch = await batchGetValues(ranges, accessToken);
+    (batch.valueRanges ?? []).forEach((vr, j) => {
       result[chunk[j]] = String(vr.values?.[0]?.[0] ?? "").trim();
     });
   }
@@ -352,14 +450,39 @@ export async function fetchRowValues(
   structure: SheetStructure,
   sheetRowNumber: number
 ): Promise<string[]> {
-  const sheets = await getSheets();
   const readCount = effectiveColCount(structure.colCount, structure.uniqueHeaders);
   const endCol = columnLetter(readCount);
-  const resp = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `'${sheet.name}'!A${sheetRowNumber}:${endCol}${sheetRowNumber}`,
+  const resp = await getValues(
+    `'${sheet.name}'!A${sheetRowNumber}:${endCol}${sheetRowNumber}`
+  );
+  return (resp.values?.[0] ?? []).map((v) => String(v ?? ""));
+}
+
+/**
+ * 移動候補の行全体を Sheets API の 1 回の batchGet で取得する。
+ * Status 探索と着地行取得を同じ応答で完結させ、直列 2 リクエストを避ける。
+ */
+export async function fetchCandidateRowValues(
+  targets: {
+    sheet: SheetConfig;
+    structure: SheetStructure;
+    sheetRowNumber: number;
+  }[]
+): Promise<Record<string, string[]>> {
+  if (!targets.length) return {};
+  const ranges = targets.map(({ sheet, structure, sheetRowNumber }) => {
+    const readCount = effectiveColCount(structure.colCount, structure.uniqueHeaders);
+    const endCol = columnLetter(readCount);
+    return `'${sheet.name}'!A${sheetRowNumber}:${endCol}${sheetRowNumber}`;
   });
-  return (resp.data.values?.[0] ?? []).map((v) => String(v ?? ""));
+  const response = await batchGetValues(ranges);
+  const result: Record<string, string[]> = {};
+  targets.forEach(({ sheet, sheetRowNumber }, index) => {
+    result[`${sheet.id}#${sheetRowNumber}`] = (
+      response.valueRanges?.[index]?.values?.[0] ?? []
+    ).map((value) => String(value ?? ""));
+  });
+  return result;
 }
 
 export async function executeWritePlan(
@@ -367,15 +490,14 @@ export async function executeWritePlan(
   plan: { cell: string; value: string }[]
 ): Promise<void> {
   if (!plan.length) return;
-  const sheets = await getSheets();
-  await sheets.spreadsheets.values.batchUpdate({
-    spreadsheetId: SPREADSHEET_ID,
-    requestBody: {
+  await sheetsFetch(`spreadsheets/${SPREADSHEET_ID}/values:batchUpdate`, {
+    method: "POST",
+    body: JSON.stringify({
       valueInputOption: "USER_ENTERED",
       data: plan.map((item) => ({
         range: `'${sheet.name}'!${item.cell}`,
         values: [[item.value]],
       })),
-    },
+    }),
   });
 }

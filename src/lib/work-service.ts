@@ -26,6 +26,7 @@ import {
 import { buildSheetRules } from "./sheet-rules";
 import {
   executeWritePlan,
+  fetchCandidateRowValues,
   fetchQueueIndex,
   fetchRowStatus,
   fetchRowStatuses,
@@ -35,6 +36,7 @@ import {
   loadSheetStructure,
 } from "./sheets";
 import {
+  cachedRowNumbers,
   cacheStats as storeCacheStats,
   clearAllCaches,
   clearNavCache,
@@ -49,12 +51,25 @@ import {
   loadQueueIndex,
   patchQueueIndex,
   patchRowValues,
+  patchWikiHistory,
   saveQueueIndex,
   saveRowValues,
   saveWikiHistory,
   setStructure,
   touchLastAccessAt,
+  type QueueRecord,
 } from "./store";
+import {
+  acquireSharedLock,
+  releaseSharedLock,
+  sharedCacheKey,
+  sharedDelete,
+  sharedGetJson,
+  sharedHashGetAll,
+  sharedHashSet,
+  sharedSetJson,
+  waitForSharedJson,
+} from "./shared-cache";
 import type {
   BootstrapPayload,
   NavigateResult,
@@ -72,6 +87,8 @@ import {
   combineWikiHistories,
   mergeWikiHistoryFromSave,
   suggestWikiHistory,
+  wikiHistoryEntryKey,
+  type WikiHistoryEntry,
   type WikiHistoryIndex,
   type WikiHistorySuggestion,
 } from "./wiki-history";
@@ -94,14 +111,87 @@ function clearCacheIfIdle(now: number = Date.now()): void {
 
 /** シートごとの SheetRules（structure 不変の間は再利用）。 */
 const rulesCache = new Map<string, SheetRules>();
+const pendingCacheBuilds = new Map<string, Promise<unknown>>();
+
+async function singleFlight<T>(key: string, build: () => Promise<T>): Promise<T> {
+  const pending = pendingCacheBuilds.get(key) as Promise<T> | undefined;
+  if (pending) return pending;
+  const promise = build().finally(() => pendingCacheBuilds.delete(key));
+  pendingCacheBuilds.set(key, promise);
+  return promise;
+}
+
+type SharedNavPatch = { status?: string; assignee?: string };
+
+async function applySharedNavDelta(
+  sheetId: string,
+  records: QueueRecord[]
+): Promise<QueueRecord[]> {
+  const delta = await sharedHashGetAll<SharedNavPatch>(
+    sharedCacheKey("nav", sheetId, "delta")
+  );
+  if (!Object.keys(delta).length) return records;
+  return records.map((record) => {
+    const patch = delta[String(record.sheetRowNumber)];
+    return patch ? { ...record, ...patch } : record;
+  });
+}
+
+async function applySharedWikiDelta(
+  sheetId: string,
+  index: WikiHistoryIndex
+): Promise<WikiHistoryIndex> {
+  const delta = await sharedHashGetAll<WikiHistoryEntry>(
+    sharedCacheKey("wiki", sheetId, "delta")
+  );
+  if (!Object.keys(delta).length) return index;
+  const entries = new Map(
+    index.entries.map((entry) => [
+      wikiHistoryEntryKey(entry.name, entry.wiki, entry.correctWiki),
+      entry,
+    ])
+  );
+  for (const [key, entry] of Object.entries(delta)) {
+    const current = entries.get(key);
+    entries.set(
+      key,
+      current && current.count > entry.count ? current : entry
+    );
+  }
+  patchWikiHistory(sheetId, index.indexRows, Object.values(delta));
+  return {
+    ...index,
+    entries: [...entries.values()].sort((a, b) => b.count - a.count),
+  };
+}
 
 async function ensureStructure(sheet: SheetConfig): Promise<SheetStructure> {
   let structure = getStructure(sheet.id);
-  if (!structure) {
-    structure = await loadSheetStructure(sheet);
-    setStructure(sheet.id, structure);
-  }
-  return structure;
+  if (structure) return structure;
+  const key = sharedCacheKey("struct", sheet.id);
+  return singleFlight(key, async () => {
+    structure = await sharedGetJson<SheetStructure>(key);
+    if (structure) {
+      setStructure(sheet.id, structure);
+      return structure;
+    }
+    const lock = await acquireSharedLock(key);
+    if (lock === "") {
+      structure = await waitForSharedJson<SheetStructure>(key);
+      if (structure) {
+        setStructure(sheet.id, structure);
+        return structure;
+      }
+    }
+    try {
+      structure = await loadSheetStructure(sheet);
+      setStructure(sheet.id, structure);
+      await sharedSetJson(key, structure, 86_400);
+      return structure;
+    } finally {
+      if (lock) await releaseSharedLock(key, lock);
+    }
+  });
 }
 
 function rulesFor(sheet: SheetConfig, structure: SheetStructure): SheetRules {
@@ -119,13 +209,39 @@ async function ensureQueueIndex(
   forceRefresh: boolean
 ) {
   if (!forceRefresh && hasQueueIndex(sheet.id, indexRows)) {
-    return loadQueueIndex(sheet.id);
+    return applySharedNavDelta(sheet.id, loadQueueIndex(sheet.id));
   }
-  const structure = await ensureStructure(sheet);
-  const rules = rulesFor(sheet, structure);
-  const records = await fetchQueueIndex(sheet, rules, indexRows);
-  saveQueueIndex(sheet.id, records, indexRows);
-  return records;
+  const key = sharedCacheKey("nav", sheet.id, indexRows);
+  return singleFlight(`${key}:${forceRefresh}`, async () => {
+    if (!forceRefresh) {
+      const shared = await sharedGetJson<QueueRecord[]>(key);
+      if (shared?.length) {
+        const merged = await applySharedNavDelta(sheet.id, shared);
+        saveQueueIndex(sheet.id, merged, indexRows, false);
+        return merged;
+      }
+    }
+    const lock = await acquireSharedLock(key, 60_000);
+    if (!forceRefresh && lock === "") {
+      const shared = await waitForSharedJson<QueueRecord[]>(key, 8, 300);
+      if (shared?.length) {
+        const merged = await applySharedNavDelta(sheet.id, shared);
+        saveQueueIndex(sheet.id, merged, indexRows, false);
+        return merged;
+      }
+    }
+    try {
+      const structure = await ensureStructure(sheet);
+      const rules = rulesFor(sheet, structure);
+      const records = await fetchQueueIndex(sheet, rules, indexRows);
+      saveQueueIndex(sheet.id, records, indexRows);
+      await sharedDelete(sharedCacheKey("nav", sheet.id, "delta"));
+      await sharedSetJson(key, records, 180);
+      return records;
+    } finally {
+      if (lock) await releaseSharedLock(key, lock);
+    }
+  });
 }
 
 /**
@@ -157,14 +273,36 @@ async function ensureWikiHistory(
   indexRows: number
 ): Promise<WikiHistoryIndex> {
   if (hasWikiHistory(sheet.id, indexRows)) {
-    return getWikiHistory(sheet.id)!;
+    return applySharedWikiDelta(sheet.id, getWikiHistory(sheet.id)!);
   }
-  const structure = await ensureStructure(sheet);
-  const rules = rulesFor(sheet, structure);
-  const raw = await fetchWikiHistoryFromSheet(sheet, rules, indexRows);
-  const index = aggregateWikiHistory(raw, indexRows);
-  saveWikiHistory(sheet.id, index);
-  return index;
+  const key = sharedCacheKey("wiki", sheet.id, indexRows);
+  return singleFlight(key, async () => {
+    const shared = await sharedGetJson<WikiHistoryIndex>(key);
+    if (shared?.indexRows === indexRows) {
+      saveWikiHistory(sheet.id, shared);
+      return applySharedWikiDelta(sheet.id, shared);
+    }
+    const lock = await acquireSharedLock(key, 120_000);
+    if (lock === "") {
+      const waited = await waitForSharedJson<WikiHistoryIndex>(key, 10, 500);
+      if (waited?.indexRows === indexRows) {
+        saveWikiHistory(sheet.id, waited);
+        return applySharedWikiDelta(sheet.id, waited);
+      }
+    }
+    try {
+      const structure = await ensureStructure(sheet);
+      const rules = rulesFor(sheet, structure);
+      const raw = await fetchWikiHistoryFromSheet(sheet, rules, indexRows);
+      const index = aggregateWikiHistory(raw, indexRows);
+      saveWikiHistory(sheet.id, index);
+      await sharedDelete(sharedCacheKey("wiki", sheet.id, "delta"));
+      await sharedSetJson(key, index, 900);
+      return index;
+    } finally {
+      if (lock) await releaseSharedLock(key, lock);
+    }
+  });
 }
 
 export async function getWikiHistorySuggestions(
@@ -260,24 +398,6 @@ export async function getQueue(
   return result;
 }
 
-/** 保存後、キャッシュ済みの index から統合キューを再計算（シート I/O なし）。 */
-function recomputeQueueAfterSave(
-  options: WorkOptions,
-  clientQueue: QueueEntry[]
-): QueueEntry[] {
-  const result: QueueEntry[] = [];
-  for (const sheet of WORK_SHEETS) {
-    if (hasQueueIndex(sheet.id, options.indexRows)) {
-      const rows = filterQueueRows(loadQueueIndex(sheet.id), options);
-      for (const row of rows) result.push({ sheet: sheet.id, row });
-    } else {
-      // index 未構築のシートはクライアントのキューをそのまま残す。
-      for (const e of clientQueue) if (e.sheet === sheet.id) result.push(e);
-    }
-  }
-  return result;
-}
-
 export async function getRowProbe(
   sheetId: string,
   sheetRowNumber: number
@@ -334,9 +454,8 @@ function shouldSkipStatus(
 }
 
 /**
- * A: 移動探索の集約。候補（travel 方向に並んだ行）を順に走査し、進捗フィルタで
- * スキップすべき行を飛ばして **最初の着地行を1リクエストで確定し、その全データも返す**。
- * status はキャッシュ優先 + シートごと1回の batchGet で取得（Sheets 往復を最小化）。
+ * A: 候補行全体を Sheets の 1 回の batchGet で取得し、その応答内の Status で
+ * スキップ判定して着地 payload を組み立てる。Status と着地行を直列取得しない。
  * 窓内に着地が無ければ landing=null（呼び出し側が次窓を要求 or refresh する）。
  */
 export async function navigateToTarget(
@@ -346,55 +465,83 @@ export async function navigateToTarget(
 ): Promise<NavigateResult> {
   const statuses: Record<string, string> = {};
   const filtered = statusFilter !== "all";
-
-  if (filtered && candidates.length) {
-    const bySheet = new Map<string, number[]>();
-    for (const c of candidates) {
-      const list = bySheet.get(c.sheet) ?? [];
-      list.push(c.row);
-      bySheet.set(c.sheet, list);
-    }
-    for (const [sheet, rows] of bySheet) {
-      const { statuses: st } = await getRowStatuses(sheet, rows);
-      for (const [row, s] of Object.entries(st)) statuses[`${sheet}#${row}`] = s;
-    }
+  // 「すべて」は先頭へ着地するだけなので、余分な候補行を取得しない。
+  const requested = filtered ? candidates : candidates.slice(0, 1);
+  const structures = new Map<string, SheetStructure>();
+  for (const candidate of requested) {
+    if (structures.has(candidate.sheet)) continue;
+    const sheet = getSheetById(candidate.sheet);
+    if (!sheet) continue;
+    structures.set(candidate.sheet, await ensureStructure(sheet));
   }
-
+  const prepared = requested.flatMap((candidate, requestedIndex) => {
+    const sheet = getSheetById(candidate.sheet);
+    const structure = structures.get(candidate.sheet);
+    if (!sheet || !structure) return [];
+    return [{ candidate, requestedIndex, sheet, structure, rules: rulesFor(sheet, structure) }];
+  });
+  const rowValuesByKey = await fetchCandidateRowValues(
+    prepared.map(({ candidate, sheet, structure }) => ({
+      sheet,
+      structure,
+      sheetRowNumber: candidate.row,
+    }))
+  );
   let landingIndex = -1;
-  for (let i = 0; i < candidates.length; i++) {
-    if (!filtered) {
-      landingIndex = i;
-      break;
-    }
-    const c = candidates[i];
-    const status = statuses[`${c.sheet}#${c.row}`] ?? "";
+  let landingPrepared: (typeof prepared)[number] | null = null;
+  for (const item of prepared) {
+    const { candidate, requestedIndex, rules } = item;
+    const key = `${candidate.sheet}#${candidate.row}`;
+    const rowValues = rowValuesByKey[key] ?? [];
+    const rowMap = rowByUniqueFromValues(rules.uniqueHeaders, rowValues);
+    const status = rules.statusUnique
+      ? String(rowMap[rules.statusUnique] ?? "").trim()
+      : "";
+    statuses[key] = status;
     if (!shouldSkipStatus(status, statusFilter)) {
-      landingIndex = i;
+      landingIndex = requestedIndex;
+      landingPrepared = item;
       break;
     }
   }
 
-  if (landingIndex < 0) {
+  if (landingIndex < 0 || !landingPrepared) {
     return { landing: null, landingIndex: -1, payload: null, statuses };
   }
 
-  const landing = candidates[landingIndex];
-  const payload = await getRow(landing.sheet, landing.row, rowOpts);
+  const { candidate: landing, sheet, rules } = landingPrepared;
+  const landingValues = rowValuesByKey[`${landing.sheet}#${landing.row}`] ?? [];
+  saveRowValues(sheet.id, landing.row, landingValues);
+  touchLastAccessAt(sheet.id);
+  const payload = buildRowPayload(
+    rules,
+    { id: sheet.id, label: sheet.label },
+    rowByUniqueFromValues(rules.uniqueHeaders, landingValues),
+    landing.row,
+    rowOpts
+  );
   return { landing, landingIndex, payload, statuses };
 }
 
 export async function getRow(
   sheetId: string,
   sheetRowNumber: number,
-  options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode" | "showNamedTriplets">
+  options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode" | "showNamedTriplets">,
+  forceFresh = false
 ): Promise<RowPayload> {
   const sheet = getSheetById(sheetId) ?? DEFAULT_SHEET;
   const structure = await ensureStructure(sheet);
   const rules = rulesFor(sheet, structure);
 
-  let rowValues = getRowValues(sheet.id, sheetRowNumber);
+  let rowValues = forceFresh ? null : getRowValues(sheet.id, sheetRowNumber);
   if (!rowValues) {
-    rowValues = await fetchRowValues(sheet, structure, sheetRowNumber);
+    const sharedKey = sharedCacheKey("row", sheet.id, sheetRowNumber);
+    rowValues = forceFresh ? null : await sharedGetJson<string[]>(sharedKey);
+    if (!rowValues) {
+      rowValues = await fetchRowValues(sheet, structure, sheetRowNumber);
+      // 同一行の保存直後は、レスポンス後の旧共有キー削除と競合させない。
+      if (!forceFresh) await sharedSetJson(sharedKey, rowValues, 60);
+    }
     // 作業用キャッシュ（rows）にその行だけ書く。nav/wiki は触らない。
     saveRowValues(sheet.id, sheetRowNumber, rowValues);
   }
@@ -410,7 +557,10 @@ export async function getRow(
   );
 }
 
-export async function saveRow(payload: SavePayload): Promise<SaveResult> {
+export async function saveRow(
+  payload: SavePayload,
+  deferSharedWork?: (work: () => Promise<void>) => void
+): Promise<SaveResult> {
   if (!ENABLE_SHEET_WRITES) {
     throw new Error("ENABLE_SHEET_WRITES=false のため書き込みできません。");
   }
@@ -418,14 +568,18 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
   const sheet = getSheetById(payload.sheet) ?? DEFAULT_SHEET;
   const structure = await ensureStructure(sheet);
   const rules = rulesFor(sheet, structure);
-  const rowPayload = await getRow(sheet.id, payload.sheetRowNumber, payload.options);
-  const workColNames = rowPayload.columns.map((c) => c.uniqueName);
-
-  const fullEditMode = payload.options.fullEditMode === true;
+  // 移行中に古い画面から保存されても動作するよう、旧 options も一時的に受理する。
+  const legacyOptions = (
+    payload as SavePayload & { options?: Pick<WorkOptions, "fullEditMode" | "indexRows"> }
+  ).options;
+  const fullEditMode = payload.fullEditMode ?? legacyOptions?.fullEditMode ?? false;
+  const indexRows = payload.indexRows ?? legacyOptions?.indexRows ?? DEFAULT_INDEX_ROWS;
+  // クライアントは変更セルだけを送る。キーは列ルールで再検証するため、
+  // 保存前に行全体を getRow して表示列を復元する必要はない。
   const updates = collectEditableUpdates(
     rules,
     payload.edits,
-    workColNames,
+    Object.keys(payload.edits),
     fullEditMode
   );
 
@@ -438,63 +592,169 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
   await executeWritePlan(sheet, plan);
   patchRowValues(sheet.id, payload.sheetRowNumber, rules.uniqueHeaders, updates);
 
-  const updatedValues = getRowValues(sheet.id, payload.sheetRowNumber);
-  if (updatedValues) {
-    const mergedRow = rowByUniqueFromValues(rules.uniqueHeaders, updatedValues);
+  // Wiki候補学習は、行表示時に作成した全三つ組の小さなスナップショットへ
+  // 今回の更新値を重ねて行う。Sheetsから行全体を読み直さない。
+  const learning = payload.wikiLearning ?? [];
+  const editedNames = new Set(Object.keys(updates));
+  const validCorrect = new Set(
+    rules.triplets
+      .map((triplet) => rules.headerMap[triplet.ok])
+      .filter((unique): unique is string => Boolean(unique))
+  );
+  const shouldLearnWiki =
+    (rules.statusUnique ? editedNames.has(rules.statusUnique) : false) ||
+    [...validCorrect].some((unique) => editedNames.has(unique));
+  let learnedEntries: WikiHistoryEntry[] = [];
+  if (learning.length && shouldLearnWiki) {
+    const mergedRow: Record<string, string> = {};
+    for (const item of learning) {
+      if (!validCorrect.has(item.correctUniqueName)) continue;
+      mergedRow[item.nameUniqueName] =
+        updates[item.nameUniqueName] ?? String(item.name ?? "");
+      mergedRow[item.wikiUniqueName] =
+        updates[item.wikiUniqueName] ?? String(item.wiki ?? "");
+      mergedRow[item.correctUniqueName] =
+        updates[item.correctUniqueName] ?? String(item.correctWiki ?? "");
+      if (item.deweyUniqueName) {
+        const editedDewey = updates[item.deweyUniqueName];
+        mergedRow[item.deweyUniqueName] =
+          editedDewey !== undefined
+            ? editedDewey
+            : item.deweyHasValue
+              ? "1"
+              : "";
+      }
+    }
+    if (rules.statusUnique) {
+      mergedRow[rules.statusUnique] = updates[rules.statusUnique] ?? "";
+    }
     let history = getWikiHistory(sheet.id);
-    if (!history || history.indexRows !== payload.options.indexRows) {
+    if (!history || history.indexRows !== indexRows) {
       history = {
-        indexRows: payload.options.indexRows,
+        indexRows,
         builtAt: Date.now(),
         entries: [],
       };
+      saveWikiHistory(sheet.id, history);
     }
-    history = mergeWikiHistoryFromSave(
+    const countsBefore = new Map(
+      history.entries.map((entry) => [
+        `${entry.name}\0${entry.wiki}\0${entry.correctWiki}`,
+        entry.count,
+      ])
+    );
+    const mergedHistory = mergeWikiHistoryFromSave(
       history,
       rules,
       mergedRow,
-      new Set(Object.keys(updates))
+      editedNames
     );
-    saveWikiHistory(sheet.id, history);
+    const changedEntries = mergedHistory.entries.filter(
+      (entry) =>
+        countsBefore.get(`${entry.name}\0${entry.wiki}\0${entry.correctWiki}`) !==
+        entry.count
+    );
+    learnedEntries = changedEntries;
+    patchWikiHistory(sheet.id, indexRows, changedEntries);
   }
 
-  const statusUnique = rowPayload.columns.find((c) => c.isStatus)?.uniqueName;
+  const statusUnique = rules.statusUnique;
+  let status: string | undefined;
   if (statusUnique && updates[statusUnique] !== undefined) {
-    patchQueueIndex(sheet.id, payload.sheetRowNumber, updates[statusUnique], "");
+    status = updates[statusUnique];
+    patchQueueIndex(sheet.id, payload.sheetRowNumber, status, "");
   }
 
-  const queue = recomputeQueueAfterSave(payload.options, payload.queue);
+  const syncSharedCache = async () => {
+    const sharedWrites: Promise<void>[] = [
+      sharedDelete(sharedCacheKey("row", sheet.id, payload.sheetRowNumber)),
+    ];
+    if (status !== undefined) {
+      sharedWrites.push(
+        sharedHashSet(sharedCacheKey("nav", sheet.id, "delta"), {
+          [String(payload.sheetRowNumber)]: { status },
+        })
+      );
+    }
+    if (learnedEntries.length) {
+      sharedWrites.push(
+        sharedHashSet(
+          sharedCacheKey("wiki", sheet.id, "delta"),
+          Object.fromEntries(
+            learnedEntries.map((entry) => [
+              wikiHistoryEntryKey(entry.name, entry.wiki, entry.correctWiki),
+              entry,
+            ])
+          )
+        )
+      );
+    }
+    await Promise.all(sharedWrites);
+  };
+  if (deferSharedWork) deferSharedWork(syncSharedCache);
+  else await syncSharedCache();
 
-  return { savedCells: plan.length, queue };
+  return { savedCells: plan.length, status };
 }
 
 export async function refreshCache(): Promise<void> {
   clearAllCaches();
   rulesCache.clear();
+  await sharedDelete(
+    ...WORK_SHEETS.flatMap((sheet) => [
+      sharedCacheKey("struct", sheet.id),
+      sharedCacheKey("nav", sheet.id, DEFAULT_INDEX_ROWS),
+      sharedCacheKey("nav", sheet.id, "delta"),
+      sharedCacheKey("wiki", sheet.id, DEFAULT_INDEX_ROWS),
+      sharedCacheKey("wiki", sheet.id, "delta"),
+    ])
+  );
   for (const sheet of WORK_SHEETS) {
     const structure = await loadSheetStructure(sheet);
     setStructure(sheet.id, structure);
+    await sharedSetJson(sharedCacheKey("struct", sheet.id), structure, 86_400);
   }
 }
 
 /** ナビ（キュー）用キャッシュのみ再構築（構造 + キュー index。次回キュー構築で作り直す）。 */
 export async function rebuildNavCache(): Promise<void> {
   rulesCache.clear();
+  await sharedDelete(
+    ...WORK_SHEETS.flatMap((sheet) => [
+      sharedCacheKey("struct", sheet.id),
+      sharedCacheKey("nav", sheet.id, DEFAULT_INDEX_ROWS),
+      sharedCacheKey("nav", sheet.id, "delta"),
+    ])
+  );
   for (const sheet of WORK_SHEETS) {
     clearNavCache(sheet.id);
     const structure = await loadSheetStructure(sheet);
     setStructure(sheet.id, structure);
+    await sharedSetJson(sharedCacheKey("struct", sheet.id), structure, 86_400);
   }
 }
 
 /** 作業用キャッシュ（行データ）のみ破棄。行を開くと個別に再取得する。 */
-export function clearRowsCacheAll(): void {
-  for (const sheet of WORK_SHEETS) clearRowsCache(sheet.id);
+export async function clearRowsCacheAll(): Promise<void> {
+  const sharedKeys: string[] = [];
+  for (const sheet of WORK_SHEETS) {
+    for (const row of cachedRowNumbers(sheet.id)) {
+      sharedKeys.push(sharedCacheKey("row", sheet.id, row));
+    }
+    clearRowsCache(sheet.id);
+  }
+  await sharedDelete(...sharedKeys);
 }
 
 /** 候補用キャッシュ（正しいwiki 候補学習）のみ破棄。次回候補表示で作り直す。 */
-export function clearWikiCacheAll(): void {
+export async function clearWikiCacheAll(): Promise<void> {
   for (const sheet of WORK_SHEETS) clearWikiCache(sheet.id);
+  await sharedDelete(
+    ...WORK_SHEETS.map((sheet) =>
+      sharedCacheKey("wiki", sheet.id, DEFAULT_INDEX_ROWS)
+    ),
+    ...WORK_SHEETS.map((sheet) => sharedCacheKey("wiki", sheet.id, "delta"))
+  );
 }
 
 export type CacheTarget = "all" | "nav" | "rows" | "wiki";
@@ -506,10 +766,10 @@ export async function clearCacheByTarget(target: CacheTarget): Promise<void> {
       await rebuildNavCache();
       return;
     case "rows":
-      clearRowsCacheAll();
+      await clearRowsCacheAll();
       return;
     case "wiki":
-      clearWikiCacheAll();
+      await clearWikiCacheAll();
       return;
     default:
       await refreshCache();

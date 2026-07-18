@@ -276,8 +276,8 @@ export default function GuidePage() {
       <section id="suggest" className={styles.section}>
         <h2 className={styles.sectionTitle}>6. 正しいWiki の候補機能</h2>
         <p>
-          「正しいwiki」欄を入力すると、過去に確定した値を候補として表示します。
-          クリックするとその値が欄に入ります。
+          「正しいwiki」欄を選ぶか「候補を表示」を押すと、過去に確定した値を候補として
+          表示します。候補をクリックするとその値が欄に入ります。
         </p>
         <ul className={styles.list}>
           <li>

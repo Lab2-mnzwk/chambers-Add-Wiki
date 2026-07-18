@@ -51,7 +51,11 @@ export function normalizeHistoryWiki(url: string): string {
   }
 }
 
-function entryKey(name: string, wiki: string, correctWiki: string): string {
+export function wikiHistoryEntryKey(
+  name: string,
+  wiki: string,
+  correctWiki: string
+): string {
   return [
     normalizeHistoryText(name),
     normalizeHistoryWiki(wiki),
@@ -77,7 +81,7 @@ export function aggregateWikiHistory(
   const map = new Map<string, WikiHistoryEntry>();
 
   const upsert = (name: string, wiki: string, correctWiki: string) => {
-    const key = entryKey(name, wiki, correctWiki);
+    const key = wikiHistoryEntryKey(name, wiki, correctWiki);
     const existing = map.get(key);
     if (existing) {
       existing.count += 1;
@@ -114,10 +118,10 @@ function upsertHistoryEntry(
   wiki: string,
   correctWiki: string
 ): WikiHistoryIndex {
-  const key = entryKey(name, wiki, correctWiki);
+  const key = wikiHistoryEntryKey(name, wiki, correctWiki);
   const entries = [...index.entries];
   const existing = entries.find(
-    (e) => entryKey(e.name, e.wiki, e.correctWiki) === key
+    (e) => wikiHistoryEntryKey(e.name, e.wiki, e.correctWiki) === key
   );
   if (existing) {
     existing.count += 1;
@@ -215,7 +219,7 @@ export function combineWikiHistories(
   for (const idx of indexes) {
     indexRows = Math.max(indexRows, idx.indexRows);
     for (const e of idx.entries) {
-      const key = entryKey(e.name, e.wiki, e.correctWiki);
+      const key = wikiHistoryEntryKey(e.name, e.wiki, e.correctWiki);
       const existing = map.get(key);
       if (existing) existing.count += e.count;
       else map.set(key, { ...e });
