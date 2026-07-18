@@ -98,10 +98,12 @@ export async function POST(request: NextRequest) {
       const runSave = () => saveRow(body.save, (work) => after(work));
       const runMove = async () => {
         if (action.kind === "jump") {
+          // 移動先の絞り込み判定用に、行キャッシュを使わず最新を読む。
           return getRow(
             action.target.sheet,
             action.target.row,
-            action.rowOptions
+            action.rowOptions,
+            true
           );
         }
         return navigateToTarget(

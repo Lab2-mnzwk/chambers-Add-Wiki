@@ -44,21 +44,19 @@
 - 保存（`saveRow`）へ送るのは **読込時から実際に変化したセル＋Wiki学習用の小さな三つ組スナップショットだけ**。最大3万件の通しキューは送らず、応答も `savedCells` と更新時の `status` だけにする。
 - Status が進捗フィルタから外れた場合、クライアントは現在行だけを `queueRows` からローカル除外する。**移動は通しキュー上の「位置（index）」基準**で行い、キュー全体の再取得はしない。
 - 保存で現在行が完了になり新キューから消えた場合は、**保存前キューでの現在位置から次／前に残っている最寄り行**を新キュー内で探して移動を継続する。`index=-1` を先頭扱いにしてキュー先頭から探索し直さない。
-- **移動時の探索は途中行を描画しない**: `次の行` / `前の行` は、キュー上の次候補をメモリで特定し、進捗フィルタ有効時は status を確認して対象外なら描画せず次へ。**着地する行が決まって初めて描画**するため、スキップ中の途中行はちらつかない（探索中は「次/前の対象行を探索中…」表示）。該当行が無ければ現在の表示行はそのまま維持（復元不要）。
-  - **A. 候補行を 1 回の Sheets `batchGet` で取得（`POST /api/navigate`）**: travel 方向の候補窓（最大 `NAV_WINDOW`=4 件）の**行全体**を1回で取得し、その同じ応答内の Status でスキップ判定して着地 payload を組み立てる（`navigateToTarget` / `fetchCandidateRowValues`）。Status の `batchGet` → 着地行の `values.get` という直列2回を行わず、通常移動の Google API 読み取りを **1回**にする。
-    - 窓内に着地が無ければ `landing=null` を返し、クライアントは全件スキップ扱いで次窓を要求。スキップ累計が `NAV_REFRESH_SKIP_THRESHOLD`（=5）に達したら **スキップが発生したシートだけ** index を再構築（`/api/queue?refresh=true&sheet=...`）して最新キューでジャンプする（大量スキップ時の負荷軽減）。
-    - 進捗「すべて」のときは先頭候補の行だけを取得して即着地する。
-  - **変更ありの保存＋移動を並列化（`POST /api/save-move`）**: `次の行` / `前の行` は現行の `batchUpdate` と最初の候補窓の `batchGet`、`開く` は `batchUpdate` と指定行取得を `Promise.allSettled` で並列実行する。同じ行を指定して開く場合だけ、保存後の値を確実に表示するため直列実行する。変更なしの移動は従来の `/api/navigate` / `/api/row` を使う。
-    - 保存失敗時は先読み済みの移動結果を採用せず、現在行と編集内容を維持する。保存成功・移動失敗時は編集を保存済みにして現在行を維持し、次の操作で二重保存しない。
+- **移動時の探索は途中行を描画しない**: `次の行` / `前の行` は、**キャッシュ順の次/前 1 行へ直行**し、着地行のライブ値（Status / Assignee）が現在の絞り込み外なら描画せずスキップして次を取り直す。キャッシュとシートの差異は稀という前提で、判定用の複数行先読みはしない。該当行が無ければ現在の表示行はそのまま維持。
+  - **通常経路**: `/api/row` で移動先 1 行だけフル取得。フィルタ外ならキューから除いて次の 1 行へ。連続スキップが `NAV_REFRESH_SKIP_THRESHOLD`（=5）に達したら該当シートの index を再構築（`/api/queue?refresh=true&sheet=...`）。鮮度が不安なときは手動の「対象行リストを更新」。
+  - **変更ありの保存＋移動（`POST /api/save-move`）**: `次の行` / `前の行` は `batchUpdate` と移動先 1 行取得、`開く` は `batchUpdate` と指定行取得を並列実行する。同じ行を指定して開く場合だけ直列。裏読み済みの次行がある「次へ」は保存だけ待って着地する。
+    - 保存失敗時は移動結果を採用せず、現在行と編集内容を維持する。保存成功・移動失敗時は編集を保存済みにして現在行を維持し、次の操作で二重保存しない。
     - 保存で現在行がキューから外れた後に移動だけ失敗しても、`removedNavigationAnchorRef` が保存前の位置を保持し、再操作時にキュー先頭へ戻らず同じ方向の続きから探索する。
-  - **次方向だけ条件限定の裏読み**: 行着地直後に、**現在の作業者・進捗フィルタ・列表示条件だけ**で次候補窓（最大4行）を `/api/navigate` で裏読みする。条件が一致する「次の行」ではその結果を使い、変更ありなら保存だけ待って着地する（読み取り待ちを避ける）。前方向・他条件・キュー再読込時は破棄する。
+  - **次方向だけ条件限定の裏読み**: 行着地直後に、**現在の作業者・進捗フィルタ・列表示条件だけ**でキャッシュ順の次 1 行を `/api/row` で裏読みする。条件一致の「次の行」ではその結果を使い、変更ありなら保存だけ待って着地する。着地値が絞り込み外ならスキップして取り直す。前方向・他条件・キュー再読込時は破棄する。
 - **移動時のキュー再取得は行わない**: 進捗「すべて」でも `次の行` / `前の行` のたびに `/api/queue` は呼ばない。キュー全体の更新はフィルタ切替・手動「対象行リストを更新」・大量スキップ refresh に限定する（保存時は現在行だけローカル更新）。
 - **応答順ガード（重要）**: `queueRows` を書き換える非同期処理（`loadQueue` / 保存後のローカル更新）は世代カウンタ `queueWriteSeqRef` で管理し、**後発の書込のみ採用**。これにより、進捗フィルタ切替・作業者/インデックス変更・対象行リスト更新の古い応答が後着で上書きする不具合を防ぐ。
 - **サーバー既定**: `/api/queue` の `statusFilter` はパラメータ不正/欠落時 **`incomplete`（完了を除く）**。クライアントは常に明示送信。
 
 ##### キャッシュ鮮度（外部編集への追従）
 
-- **保存時に status を自己修復**: `saveRow` は Status 変更を nav キャッシュ（`patchQueueIndex`）と rows キャッシュ（`patchRowValues`）へ反映するため、アプリ内の完了は即スキップ対象になる。移動探索は候補行を Sheets から取得して **ライブ Status** で判定するため、アプリ外で完了にした行も着地前にスキップする。キュー件数の表示ずれは「対象行リストを更新」で解消。
+- **保存時に status を自己修復**: `saveRow` は Status 変更を nav キャッシュ（`patchQueueIndex`）と rows キャッシュ（`patchRowValues`）へ反映するため、アプリ内の完了は即スキップ対象になる。移動はキャッシュ順の次行へ直行し、着地 1 行のライブ値だけ見て絞り込み外ならスキップする（差異は稀という前提）。キュー件数の表示ずれや鮮度不安は「対象行リストを更新」で解消。
 - **SheetRules のメモリキャッシュ**: `buildSheetRules` の結果はシートごとにメモリ保持し、ヘッダー不変の間は再利用する（`work-service.ts` の `rulesCache`）。
 - **「対象行リストを更新」は強制リフレッシュ**: ボタン押下時は `/api/queue?...&refresh=true` で `getQueue(options, true)` を呼び、キャッシュを無視して **シートから index（連番/status/assignee）を 1 回の batchGet で取り直す**。これでアプリ外の完了も含めて即座に反映される（行データ・構造・Wiki 履歴は保持＝軽量）。
 - 通常の読込（作業者切替・進捗フィルタ/`indexRows` 変更など）はキャッシュ利用（`refresh` なし）でシート I/O を抑える。フィルタが「効かない」場合は、外部編集でキャッシュが古い可能性があるため「対象行リストを更新」を実行する。
@@ -69,15 +67,15 @@
 
 ##### 性能設計（キャッシュの用途別分割）
 
-- 目的: 行移動のホットパス（`navigateToTarget` / `getRow`）で **巨大な `queueIndex`（最大 30,000 行）や `wikiHistory` を毎回シリアライズして書き戻さない**こと。以前は 1 シート 1 ファイルの全部入りで、行を開くたびに全体を read/write していた（書き込み増幅）。
+- 目的: 行移動のホットパス（`getRow`）で **巨大な `queueIndex`（最大 30,000 行）や `wikiHistory` を毎回シリアライズして書き戻さない**こと。以前は 1 シート 1 ファイルの全部入りで、行を開くたびに全体を read/write していた（書き込み増幅）。
 - 用途別ファイルへ分割（`store.ts`）: **struct / nav / nav-delta / rows / wiki / wiki-delta / meta**。Status保存とWiki学習は小さな差分だけを書き、全体JSONの書き込み増幅を避ける。
-  - `navigateToTarget`（`POST /api/navigate`）: 候補4行以下の全データを `fetchCandidateRowValues` の **1回の batchGet** で取り、Status 判定と着地 payload 構築を同じ応答で完結。着地行だけ rows キャッシュへ保存する。
+  - 通常の `次の行` / `前の行`: キャッシュ順の移動先 1 行だけを `getRow`（`/api/row`）で取得。判定用の複数行 `batchGet` は行わない。
   - `getRow`: 取得した行を **rows ファイルにその行だけ**書く（nav/wiki は触らない）。
   - `getQueue`: nav を読んで絞り込み（refresh 時のみ nav を再構築）。
   - `saveRow`: 行全体を事前取得せず、変更セルを `batchUpdate` で直接保存。rows（該当行）+ wiki（正しいWiki/Status更新時のみ学習）+ nav（Status変更時のみ）を更新する。
 - **任意の共有キャッシュ（`shared-cache.ts`）**:
   - `KV_REST_API_URL/TOKEN` または `UPSTASH_REDIS_REST_URL/TOKEN` があれば自動有効化。未設定・障害時はローカルキャッシュとSheetsへフォールバックする。
-  - TTLは構造24時間、nav 3分、Wiki履歴15分、個別行60秒。移動時はライブ行取得でStatusを判定するため、共有navの短い時間差で完了行へ誤着地しない。
+  - TTLは構造24時間、nav 3分、Wiki履歴15分、個別行60秒。移動はキャッシュ順を信じ、着地1行のライブ値で稀なズレだけ回復する。
   - 同一インスタンスはPromise single-flight、複数インスタンスはRedis `SET NX PX`ロックでnav/Wikiの大規模再構築重複を抑止する。
   - 保存時のStatus・Wiki学習のRedis Hash差分更新と共有rowキー削除は、Next.js `after()` で**レスポンス送信後**に実行する。ローカルキャッシュは保存処理内で先に更新するため、利用者本人の次操作には即時反映される。フル再構築時は差分Hashを削除する。
 - **Sheets REST直接通信（`sheets.ts`）**: `googleapis`依存を廃止し、標準`fetch`でSheets v4 REST APIを呼ぶ。OAuthは既存ユーザートークン、サービスアカウントはRS256 JWTでアクセストークンを取得・再利用する。429/503のみ最大1回再試行する。`/api/save-move` は `AsyncLocalStorage` にアクセストークンを保持し、並列の保存・行取得で認証処理を1回だけ行う。
@@ -241,7 +239,7 @@ UI の選択値（`ColumnMode`）は内部フラグへ次のように対応（`s
 | 列ルールの構造検出 | `src/lib/sheet-rules.ts`（`buildSheetRules`） |
 | 列ルール | `src/lib/columns.ts` |
 | Sheets API | `src/lib/sheets.ts`, `src/lib/work-service.ts` |
-| 移動探索の集約（A） | `src/app/api/navigate/route.ts`, `navigateToTarget`（`work-service.ts`） |
+| キャッシュ順の1行移動 | `WorkApp.tsx`（`navigate` / `warmNextPrefetch`）, `/api/row` |
 | 保存と移動の並列化 | `src/app/api/save-move/route.ts`, `WorkApp.tsx` |
 | 認証・トークン更新 | `src/auth.ts`, `src/lib/google-session.ts`, `src/lib/api-error.ts` |
 | UI | `src/components/WorkApp.tsx`, `WorkRowTable.tsx` |

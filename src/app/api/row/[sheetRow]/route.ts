@@ -23,11 +23,18 @@ export async function GET(
       request.nextUrl.searchParams.get("fullEditMode") === "true";
     const showNamedTriplets =
       request.nextUrl.searchParams.get("showNamedTriplets") === "true";
-    const payload = await getRow(sheet, sheetRowNumber, {
-      lightBlueOnly,
-      fullEditMode,
-      showNamedTriplets,
-    });
+    const forceFresh =
+      request.nextUrl.searchParams.get("fresh") === "true";
+    const payload = await getRow(
+      sheet,
+      sheetRowNumber,
+      {
+        lightBlueOnly,
+        fullEditMode,
+        showNamedTriplets,
+      },
+      forceFresh
+    );
     return NextResponse.json(payload);
   } catch (e) {
     return apiErrorResponse(e);
