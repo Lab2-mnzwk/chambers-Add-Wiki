@@ -34,9 +34,27 @@ const NAV_REFRESH_SKIP_THRESHOLD = 5;
 // A: 1回の batchGet で取得する候補行数。行全体を読むため少数に抑える。
 const NAV_WINDOW = 4;
 
+type NextPrefetch = {
+  seq: number;
+  fromKey: string;
+  candidateKeys: string;
+  filterKey: string;
+  candidates: QueueEntry[];
+  result?: NavigateResult;
+  promise?: Promise<NavigateResult | null>;
+};
+
 const entryKey = (e: QueueEntry) => `${e.sheet}#${e.row}`;
 const indexOfEntry = (q: QueueEntry[], e: QueueEntry | null): number =>
   e ? q.findIndex((x) => x.sheet === e.sheet && x.row === e.row) : -1;
+const navFilterKey = (opts: WorkOptions) =>
+  [
+    opts.worker,
+    opts.statusFilter,
+    opts.lightBlueOnly,
+    opts.fullEditMode,
+    opts.showNamedTriplets,
+  ].join("|");
 
 // travel 方向に並ぶ候補（removed を除く）を最大 NAV_WINDOW 件集める。
 const collectWindow = (
@@ -350,6 +368,9 @@ export function WorkApp() {
     entry: QueueEntry;
     beforeQueue: QueueEntry[];
   } | null>(null);
+  /** 現在の絞り込み条件だけで、次方向の候補窓を裏読みする。 */
+  const nextPrefetchRef = useRef<NextPrefetch | null>(null);
+  const nextPrefetchSeqRef = useRef(0);
 
   const currentEntry = useMemo<QueueEntry | null>(() => {
     if (historyIndex >= 0 && history[historyIndex]) return history[historyIndex];
@@ -502,6 +523,77 @@ export function WorkApp() {
     []
   );
 
+  const clearNextPrefetch = useCallback(() => {
+    nextPrefetchSeqRef.current += 1;
+    nextPrefetchRef.current = null;
+  }, []);
+
+  /** 現在選択中の条件だけで、次方向の候補窓を裏で温める。前方向や他条件は対象外。 */
+  const warmNextPrefetch = useCallback(
+    (fromEntry: QueueEntry, q: QueueEntry[], opts: WorkOptions) => {
+      const ci = indexOfEntry(q, fromEntry);
+      if (ci < 0) {
+        clearNextPrefetch();
+        return;
+      }
+      const windowEntries = collectWindow(q, ci + 1, "next", new Set());
+      if (!windowEntries.length) {
+        clearNextPrefetch();
+        return;
+      }
+      const candidates = windowEntries.map((item) => item.entry);
+      const seq = ++nextPrefetchSeqRef.current;
+      const entry: NextPrefetch = {
+        seq,
+        fromKey: entryKey(fromEntry),
+        candidateKeys: candidates.map(entryKey).join(","),
+        filterKey: navFilterKey(opts),
+        candidates,
+      };
+      nextPrefetchRef.current = entry;
+      entry.promise = fetchNavigate(candidates, opts)
+        .then((result) => {
+          if (
+            nextPrefetchSeqRef.current !== seq ||
+            nextPrefetchRef.current?.seq !== seq
+          ) {
+            return null;
+          }
+          nextPrefetchRef.current = { ...entry, result };
+          return result;
+        })
+        .catch(() => {
+          if (nextPrefetchRef.current?.seq === seq) {
+            nextPrefetchRef.current = null;
+          }
+          return null;
+        });
+    },
+    [clearNextPrefetch, fetchNavigate]
+  );
+
+  /** 裏読み結果が現在位置・候補窓・絞り込み条件と一致するときだけ消費する。 */
+  const takeNextPrefetch = useCallback(
+    async (
+      fromEntry: QueueEntry,
+      candidates: QueueEntry[],
+      opts: WorkOptions
+    ): Promise<NavigateResult | null> => {
+      const pending = nextPrefetchRef.current;
+      if (!pending) return null;
+      if (pending.fromKey !== entryKey(fromEntry)) return null;
+      if (pending.filterKey !== navFilterKey(opts)) return null;
+      if (pending.candidateKeys !== candidates.map(entryKey).join(",")) {
+        return null;
+      }
+      nextPrefetchRef.current = null;
+      if (pending.result) return pending.result;
+      if (pending.promise) return pending.promise;
+      return null;
+    },
+    []
+  );
+
   const fetchSaveMove = useCallback(
     async (
       save: SavePayload,
@@ -543,6 +635,7 @@ export function WorkApp() {
   const loadQueue = useCallback(
     async (opts: WorkOptions, keepPosition: boolean, forceRefresh = false) => {
       const seq = ++queueWriteSeqRef.current;
+      clearNextPrefetch();
       setMessage("キューを読み込み中…");
       const qs = optionsQuery(opts) + (forceRefresh ? "&refresh=true" : "");
       const res = await fetch(`/api/queue?${qs}`);
@@ -589,8 +682,9 @@ export function WorkApp() {
       setQueueIndex(nextQueueIndex);
       const landed = nextHistory[nextHistoryIndex];
       await loadRow(landed, opts);
+      warmNextPrefetch(landed, rows, opts);
     },
-    [history, historyIndex, loadRow, queueIndex]
+    [clearNextPrefetch, history, historyIndex, loadRow, queueIndex, warmNextPrefetch]
   );
 
   useEffect(() => {
@@ -692,6 +786,7 @@ export function WorkApp() {
     if (!currentEntry) return;
     try {
       await loadRow(currentEntry, next);
+      warmNextPrefetch(currentEntry, queueRows, next);
     } catch (e) {
       setMessage(String(e), "error");
     }
@@ -787,6 +882,7 @@ export function WorkApp() {
     sheets?: string[]
   ): Promise<QueueEntry[] | null> => {
     try {
+      clearNextPrefetch();
       const sheetParam =
         sheets && sheets.length
           ? `&sheet=${sheets.map(encodeURIComponent).join(",")}`
@@ -828,6 +924,7 @@ export function WorkApp() {
     setHistoryIndex(nextHistory.length - 1);
     const idx = indexOfEntry(finalQ, cand);
     if (idx >= 0) setQueueIndex(idx);
+    warmNextPrefetch(cand, finalQ, options);
   };
 
   // 探索して次/前の対象行へジャンプする（途中行は描画しない）。
@@ -857,70 +954,128 @@ export function WorkApp() {
         const firstWindow = collectWindow(q, firstStart, dir, removed);
         const updates = changedEdits(edits, originalEdits);
         const seq = ++queueWriteSeqRef.current;
-        setMessage(
+        const prefetched =
           dir === "next"
-            ? "保存しながら次の対象行を読み込み中…"
-            : "保存しながら前の対象行を読み込み中…"
-        );
-        const combined = await fetchSaveMove(
-          buildCurrentSavePayload(entryBeforeSave, updates),
-          {
-            kind: "navigate",
-            candidates: firstWindow.map((item) => item.entry),
-            statusFilter: options.statusFilter,
-            rowOptions: {
-              lightBlueOnly: options.lightBlueOnly,
-              fullEditMode: options.fullEditMode,
-              showNamedTriplets: options.showNamedTriplets,
-            },
+            ? await takeNextPrefetch(
+                entryBeforeSave,
+                firstWindow.map((item) => item.entry),
+                options
+              )
+            : null;
+
+        if (prefetched) {
+          // 次行判定は裏読み済みなので、保存だけ待って着地する。
+          setMessage("保存中…");
+          try {
+            const res = await fetch("/api/save", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(
+                buildCurrentSavePayload(entryBeforeSave, updates)
+              ),
+            });
+            const saveResult = await readApiResponse<SaveResult>(
+              res,
+              "保存に失敗"
+            );
+            q = applySaveSuccess(
+              saveResult,
+              updates,
+              entryBeforeSave,
+              queueBeforeSave,
+              seq
+            );
+            if (indexOfEntry(q, entryBeforeSave) < 0) {
+              removedNavigationAnchorRef.current = {
+                entry: entryBeforeSave,
+                beforeQueue: queueBeforeSave,
+              };
+            }
+            if (prefetched.landing && prefetched.payload) {
+              for (let j = 0; j < prefetched.landingIndex; j++) {
+                removed.add(entryKey(firstWindow[j].entry));
+              }
+              landOn(prefetched.landing, prefetched.payload, q, removed);
+              return;
+            }
+            for (const item of firstWindow) {
+              removed.add(entryKey(item.entry));
+              refreshTargets.add(item.entry.sheet);
+              skipped += 1;
+            }
+            ci = firstWindow.length
+              ? indexOfEntry(q, firstWindow[firstWindow.length - 1].entry)
+              : q.length - 1;
+          } catch (e) {
+            setMessage(String(e), "error");
+            return;
           }
-        );
-        if (!combined.save.ok) {
-          setMessage(combined.save.error, "error");
-          return;
-        }
-        q = applySaveSuccess(
-          combined.save.result,
-          updates,
-          entryBeforeSave,
-          queueBeforeSave,
-          seq
-        );
-        if (indexOfEntry(q, entryBeforeSave) < 0) {
-          removedNavigationAnchorRef.current = {
-            entry: entryBeforeSave,
-            beforeQueue: queueBeforeSave,
-          };
-        }
-        if (!combined.move.ok) {
+        } else {
           setMessage(
-            `${combined.save.result.savedCells} セルは保存しましたが、移動に失敗しました: ${combined.move.error}`,
-            "error"
+            dir === "next"
+              ? "保存しながら次の対象行を読み込み中…"
+              : "保存しながら前の対象行を読み込み中…"
           );
-          return;
-        }
-        if (combined.move.kind !== "navigate") {
-          setMessage("保存しましたが、移動応答の形式が不正です。", "error");
-          return;
-        }
-        const firstResult = combined.move.result;
-        if (firstResult.landing && firstResult.payload) {
-          for (let j = 0; j < firstResult.landingIndex; j++) {
-            removed.add(entryKey(firstWindow[j].entry));
+          const combined = await fetchSaveMove(
+            buildCurrentSavePayload(entryBeforeSave, updates),
+            {
+              kind: "navigate",
+              candidates: firstWindow.map((item) => item.entry),
+              statusFilter: options.statusFilter,
+              rowOptions: {
+                lightBlueOnly: options.lightBlueOnly,
+                fullEditMode: options.fullEditMode,
+                showNamedTriplets: options.showNamedTriplets,
+              },
+            }
+          );
+          if (!combined.save.ok) {
+            setMessage(combined.save.error, "error");
+            return;
           }
-          landOn(firstResult.landing, firstResult.payload, q, removed);
-          return;
+          q = applySaveSuccess(
+            combined.save.result,
+            updates,
+            entryBeforeSave,
+            queueBeforeSave,
+            seq
+          );
+          if (indexOfEntry(q, entryBeforeSave) < 0) {
+            removedNavigationAnchorRef.current = {
+              entry: entryBeforeSave,
+              beforeQueue: queueBeforeSave,
+            };
+          }
+          if (!combined.move.ok) {
+            setMessage(
+              `${combined.save.result.savedCells} セルは保存しましたが、移動に失敗しました: ${combined.move.error}`,
+              "error"
+            );
+            return;
+          }
+          if (combined.move.kind !== "navigate") {
+            setMessage("保存しましたが、移動応答の形式が不正です。", "error");
+            return;
+          }
+          const firstResult = combined.move.result;
+          if (firstResult.landing && firstResult.payload) {
+            for (let j = 0; j < firstResult.landingIndex; j++) {
+              removed.add(entryKey(firstWindow[j].entry));
+            }
+            landOn(firstResult.landing, firstResult.payload, q, removed);
+            return;
+          }
+          for (const item of firstWindow) {
+            removed.add(entryKey(item.entry));
+            refreshTargets.add(item.entry.sheet);
+            skipped += 1;
+          }
+          ci = firstWindow.length
+            ? indexOfEntry(q, firstWindow[firstWindow.length - 1].entry)
+            : dir === "next"
+              ? q.length - 1
+              : 0;
         }
-        for (const item of firstWindow) {
-          removed.add(entryKey(item.entry));
-          refreshTargets.add(item.entry.sheet);
-          skipped += 1;
-        }
-        ci = firstWindow.length
-          ? indexOfEntry(q, firstWindow[firstWindow.length - 1].entry)
-          : dir === "next"
-            ? q.length - 1
-            : 0;
       } else {
         const saved = await resolveNavigationQueue();
         if (!saved.ok) return;
@@ -968,10 +1123,14 @@ export function WorkApp() {
           return;
         }
 
-        const res = await fetchNavigate(
-          win.map((w) => w.entry),
-          options
-        );
+        const winEntries = win.map((w) => w.entry);
+        const fromForPrefetch = entryBeforeSave ?? currentEntry;
+        const prefetched =
+          dir === "next" && fromForPrefetch && skipped === 0 && removed.size === 0
+            ? await takeNextPrefetch(fromForPrefetch, winEntries, options)
+            : null;
+        const res =
+          prefetched ?? (await fetchNavigate(winEntries, options));
 
         if (res.landing && res.payload) {
           for (let j = 0; j < res.landingIndex; j++) {
@@ -1115,6 +1274,7 @@ export function WorkApp() {
       setRowPayload(payload);
       syncEditsFromPayload(payload);
       setMessage("");
+      warmNextPrefetch(entry, q, options);
     } catch (e) {
       setMessage(String(e), "error");
     } finally {
