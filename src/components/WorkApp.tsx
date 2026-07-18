@@ -7,12 +7,13 @@ import { LoginPanel } from "./LoginPanel";
 import { WorkRowTable } from "./WorkRowTable";
 import type {
   BootstrapPayload,
+  NavigateResult,
   QueueEntry,
   RowPayload,
   WorkOptions,
 } from "@/lib/types";
 import { applyTheme, loadThemeMode, type ThemeMode } from "@/lib/theme";
-import { ASSIGN_ALL_ROWS_NAME, isDoneStatus, STATUS_NOT_STARTED } from "@/lib/config";
+import { ASSIGN_ALL_ROWS_NAME } from "@/lib/config";
 
 const PREFS_KEY = "wikiWorkNext";
 const LAST_ROW_KEY = "wikiWorkLastRow";
@@ -21,12 +22,41 @@ const LAST_ROW_KEY = "wikiWorkLastRow";
 // キュー index を一度だけ再構築して最新キューで一気にジャンプする（負荷軽減）。
 const NAV_REFRESH_SKIP_THRESHOLD = 5;
 
+// A: 1回の /api/navigate で走査する候補の最大数（サーバー側は status を
+// シートごと1回の batchGet で取り、着地行の全データも同じ応答で返す）。
+const NAV_WINDOW = 60;
+
 // 起動直後のリクエスト集中を避けるための候補ウォーム遅延（ミリ秒）。
 const WIKI_WARM_DELAY_MS = 6000;
 
 const entryKey = (e: QueueEntry) => `${e.sheet}#${e.row}`;
 const indexOfEntry = (q: QueueEntry[], e: QueueEntry | null): number =>
   e ? q.findIndex((x) => x.sheet === e.sheet && x.row === e.row) : -1;
+
+// travel 方向に並ぶ候補（removed を除く）を最大 NAV_WINDOW 件集める。
+const collectWindow = (
+  q: QueueEntry[],
+  fromCi: number,
+  dir: "next" | "prev",
+  removed: Set<string>
+): { entry: QueueEntry; idx: number }[] => {
+  const out: { entry: QueueEntry; idx: number }[] = [];
+  let i = fromCi;
+  while (out.length < NAV_WINDOW && i >= 0 && i < q.length) {
+    if (!removed.has(entryKey(q[i]))) out.push({ entry: q[i], idx: i });
+    i = dir === "next" ? i + 1 : i - 1;
+  }
+  return out;
+};
+
+// B: 先読み結果（次の対象行の全データ）。next 移動が即時になる。
+type PrefetchEntry = {
+  fromKey: string;
+  landing: QueueEntry;
+  payload: RowPayload;
+  skippedKeys: string[];
+  statuses: Record<string, string>;
+};
 
 function loadStoredLastRow(): QueueEntry | null {
   try {
@@ -256,6 +286,8 @@ export function WorkApp() {
   const pendingRestoreRowRef = useRef<QueueEntry | null>(null);
   // 移動探索の status 先読みメモ（キー: シートID#行番号）。対象行リストを更新/保存で破棄。
   const statusMemoRef = useRef<Map<string, string>>(new Map());
+  // B: 次の対象行の先読み結果。キュー変更（保存/再読込/refresh）で破棄。
+  const prefetchRef = useRef<PrefetchEntry | null>(null);
 
   const currentEntry = useMemo<QueueEntry | null>(() => {
     if (historyIndex >= 0 && history[historyIndex]) return history[historyIndex];
@@ -369,12 +401,6 @@ export function WorkApp() {
     localStorage.setItem(PREFS_KEY, JSON.stringify(next));
   }, []);
 
-  const shouldSkipLiveStatus = (status: string): boolean => {
-    if (options.statusFilter === "incomplete") return isDoneStatus(status);
-    if (options.statusFilter === "notStarted") return status !== STATUS_NOT_STARTED;
-    return false;
-  };
-
   const syncEditsFromPayload = (payload: RowPayload) => {
     const next: Record<string, string> = {};
     for (const col of payload.columns) {
@@ -384,50 +410,60 @@ export function WorkApp() {
     setOriginalEdits(next);
   };
 
-  // A+B: 未取得の候補 status を先読みで一括取得し、statusMemo へ格納する。
-  // シートごとに 1 リクエスト（batchGet）。キャッシュ済み行はサーバー側で API を使わない。
-  const NAV_LOOKAHEAD = 20;
-  const primeStatusesAhead = useCallback(
-    async (
-      q: QueueEntry[],
-      startIdx: number,
-      dir: "next" | "prev",
-      removed: Set<string>
-    ): Promise<void> => {
-      const memo = statusMemoRef.current;
-      const targets: QueueEntry[] = [];
-      let i = startIdx;
-      while (targets.length < NAV_LOOKAHEAD && i >= 0 && i < q.length) {
-        const e = q[i];
-        const key = entryKey(e);
-        if (!removed.has(key) && !memo.has(key)) targets.push(e);
-        i = dir === "next" ? i + 1 : i - 1;
-      }
-      if (!targets.length) return;
-
-      const bySheet = new Map<string, number[]>();
-      for (const e of targets) {
-        const list = bySheet.get(e.sheet) ?? [];
-        list.push(e.row);
-        bySheet.set(e.sheet, list);
-      }
-      for (const [sheet, rows] of bySheet) {
-        const res = await fetch("/api/probe", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sheet, rows }),
-        });
-        if (!res.ok) continue;
-        const data = (await res.json()) as {
-          sheet: string;
-          statuses: Record<string, string>;
-        };
-        for (const [row, status] of Object.entries(data.statuses ?? {})) {
-          memo.set(`${sheet}#${row}`, status);
-        }
-      }
+  // A: 探索スキップ＋着地行の取得をサーバー側で 1 リクエストに集約する。
+  const fetchNavigate = useCallback(
+    async (candidates: QueueEntry[], opts: WorkOptions): Promise<NavigateResult> => {
+      const res = await fetch("/api/navigate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidates,
+          statusFilter: opts.statusFilter,
+          row: {
+            lightBlueOnly: opts.lightBlueOnly,
+            fullEditMode: opts.fullEditMode,
+            showNamedTriplets: opts.showNamedTriplets,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "行の探索に失敗");
+      return data as NavigateResult;
     },
     []
+  );
+
+  // B: 着地後、次の対象行を裏で先読みして prefetchRef に保持する（next 即時化）。
+  const doPrefetch = useCallback(
+    async (fromEntry: QueueEntry, q: QueueEntry[], opts: WorkOptions) => {
+      try {
+        const ci = indexOfEntry(q, fromEntry);
+        if (ci < 0) return;
+        const win = collectWindow(q, ci + 1, "next", new Set());
+        if (!win.length) return;
+        const result = await fetchNavigate(
+          win.map((w) => w.entry),
+          opts
+        );
+        for (const [k, s] of Object.entries(result.statuses)) {
+          statusMemoRef.current.set(k, s);
+        }
+        if (!result.landing || !result.payload) return;
+        const skippedKeys = win
+          .slice(0, result.landingIndex)
+          .map((w) => entryKey(w.entry));
+        prefetchRef.current = {
+          fromKey: entryKey(fromEntry),
+          landing: result.landing,
+          payload: result.payload,
+          skippedKeys,
+          statuses: result.statuses,
+        };
+      } catch {
+        // 先読み失敗は無視（本探索で取得する）。
+      }
+    },
+    [fetchNavigate]
   );
 
   const fetchRowPayload = useCallback(
@@ -464,6 +500,7 @@ export function WorkApp() {
       const rows = (data.queue ?? []) as QueueEntry[];
       setQueueRows(rows);
       statusMemoRef.current.clear();
+      prefetchRef.current = null;
 
       if (!rows.length) {
         setRowPayload(null);
@@ -495,9 +532,12 @@ export function WorkApp() {
       setHistory(nextHistory);
       setHistoryIndex(nextHistoryIndex);
       setQueueIndex(nextQueueIndex);
-      await loadRow(nextHistory[nextHistoryIndex], opts);
+      const landed = nextHistory[nextHistoryIndex];
+      await loadRow(landed, opts);
+      // B: 初回着地後、次の対象行を先読みして最初の「次の行」を速くする。
+      void doPrefetch(landed, rows, opts);
     },
-    [history, historyIndex, loadRow, queueIndex]
+    [history, historyIndex, loadRow, queueIndex, doPrefetch]
   );
 
   useEffect(() => {
@@ -660,6 +700,7 @@ export function WorkApp() {
       const nextQueueRows = (data.queue ?? queueRows) as QueueEntry[];
       if (seq === queueWriteSeqRef.current) setQueueRows(nextQueueRows);
       statusMemoRef.current.clear();
+      prefetchRef.current = null;
       setOriginalEdits(edits);
       setMessage(`${data.savedCells} セルを保存しました。`, "ok");
       return { ok: true, queueRows: nextQueueRows };
@@ -696,13 +737,40 @@ export function WorkApp() {
       const rows = (data.queue ?? []) as QueueEntry[];
       setQueueRows(rows);
       statusMemoRef.current.clear();
+      prefetchRef.current = null;
       return rows;
     } catch {
       return null;
     }
   };
 
+  // 着地: 行を描画し、スキップした行をキューから除き、履歴・位置を更新する。
+  const landOn = (
+    cand: QueueEntry,
+    payload: RowPayload,
+    q: QueueEntry[],
+    removed: Set<string>
+  ) => {
+    statusMemoRef.current.set(
+      entryKey(cand),
+      payload.columns.find((c) => c.isStatus)?.value ?? ""
+    );
+    const finalQ = q.filter((e) => !removed.has(entryKey(e)));
+    setRowPayload(payload);
+    syncEditsFromPayload(payload);
+    setMessage("");
+    setQueueRows(finalQ);
+    const nextHistory = history.slice(0, historyIndex + 1);
+    nextHistory.push(cand);
+    setHistory(nextHistory);
+    setHistoryIndex(nextHistory.length - 1);
+    const idx = indexOfEntry(finalQ, cand);
+    if (idx >= 0) setQueueIndex(idx);
+  };
+
   // 探索して次/前の対象行へジャンプする（途中行は描画しない）。
+  // A: 探索スキップ＋着地取得を /api/navigate で1リクエストに集約。
+  // B: next は先読み結果があれば即時着地し、着地後に次を先読みする。
   const navigate = async (dir: "next" | "prev") => {
     if (loading) return;
     setLoading(true);
@@ -710,20 +778,40 @@ export function WorkApp() {
       const saved = await resolveNavigationQueue();
       if (!saved.ok) return;
       let q = saved.queueRows;
+
+      // B: 先読みヒット（next のみ・保存でキューが変わっていない場合）。
+      if (dir === "next") {
+        const p = prefetchRef.current;
+        if (
+          p &&
+          currentEntry &&
+          p.fromKey === entryKey(currentEntry) &&
+          indexOfEntry(q, p.landing) >= 0
+        ) {
+          prefetchRef.current = null;
+          for (const [k, s] of Object.entries(p.statuses)) {
+            statusMemoRef.current.set(k, s);
+          }
+          const removed = new Set(p.skippedKeys);
+          landOn(p.landing, p.payload, q, removed);
+          const nextQ = q.filter((e) => !removed.has(entryKey(e)));
+          void doPrefetch(p.landing, nextQ, options);
+          return;
+        }
+      }
+
       const removed = new Set<string>();
       let ci = indexOfEntry(q, currentEntry);
       if (dir === "prev" && ci < 0) ci = q.length;
       let skipped = 0;
       let refreshed = false;
       const refreshTargets = new Set<string>();
-      const filtered = options.statusFilter !== "all";
       setMessage(dir === "next" ? "次の対象行を探索中…" : "前の対象行を探索中…");
+
       while (true) {
-        ci = dir === "next" ? ci + 1 : ci - 1;
-        while (ci >= 0 && ci < q.length && removed.has(entryKey(q[ci]))) {
-          ci = dir === "next" ? ci + 1 : ci - 1;
-        }
-        if (ci < 0 || ci >= q.length) {
+        const start = dir === "next" ? ci + 1 : ci - 1;
+        const win = collectWindow(q, start, dir, removed);
+        if (!win.length) {
           if (dir === "next") setMessage("キューの末尾です。", "ok");
           else {
             setMessage("");
@@ -731,53 +819,46 @@ export function WorkApp() {
           }
           return;
         }
-        const cand = q[ci];
 
-        if (filtered) {
-          // A+B+C: status はメモ優先。未取得なら先読みで一括取得（batchGet）。
-          let status = statusMemoRef.current.get(entryKey(cand));
-          if (status === undefined) {
-            await primeStatusesAhead(q, ci, dir, removed);
-            status = statusMemoRef.current.get(entryKey(cand)) ?? "";
-          }
-          if (shouldSkipLiveStatus(status)) {
-            removed.add(entryKey(cand));
-            refreshTargets.add(cand.sheet);
-            skipped += 1;
-            if (!refreshed && skipped >= NAV_REFRESH_SKIP_THRESHOLD) {
-              refreshed = true;
-              const r = await refreshQueueRows([...refreshTargets]);
-              if (r) {
-                q = r;
-                removed.clear();
-                refreshTargets.clear();
-                ci = indexOfEntry(q, currentEntry);
-                if (dir === "prev" && ci < 0) ci = q.length;
-              }
-            }
-            continue;
-          }
+        const res = await fetchNavigate(
+          win.map((w) => w.entry),
+          options
+        );
+        for (const [k, s] of Object.entries(res.statuses)) {
+          statusMemoRef.current.set(k, s);
         }
 
-        // C: 着地は行全体を1回取得するだけ（probe との二重取得をしない）。
-        const payload = await fetchRowPayload(cand, options);
-        statusMemoRef.current.set(
-          entryKey(cand),
-          payload.columns.find((c) => c.isStatus)?.value ?? ""
-        );
-        // 着地: ここで初めて描画する。
-        const finalQ = q.filter((e) => !removed.has(entryKey(e)));
-        setRowPayload(payload);
-        syncEditsFromPayload(payload);
-        setMessage("");
-        setQueueRows(finalQ);
-        const nextHistory = history.slice(0, historyIndex + 1);
-        nextHistory.push(cand);
-        setHistory(nextHistory);
-        setHistoryIndex(nextHistory.length - 1);
-        const idx = indexOfEntry(finalQ, cand);
-        if (idx >= 0) setQueueIndex(idx);
-        break;
+        if (res.landing && res.payload) {
+          for (let j = 0; j < res.landingIndex; j++) {
+            removed.add(entryKey(win[j].entry));
+            refreshTargets.add(win[j].entry.sheet);
+            skipped += 1;
+          }
+          landOn(res.landing, res.payload, q, removed);
+          const nextQ = q.filter((e) => !removed.has(entryKey(e)));
+          void doPrefetch(res.landing, nextQ, options);
+          return;
+        }
+
+        // 窓内すべてスキップ。次の窓へ。
+        for (const w of win) {
+          removed.add(entryKey(w.entry));
+          refreshTargets.add(w.entry.sheet);
+          skipped += 1;
+        }
+        ci = win[win.length - 1].idx;
+
+        if (!refreshed && skipped >= NAV_REFRESH_SKIP_THRESHOLD) {
+          refreshed = true;
+          const r = await refreshQueueRows([...refreshTargets]);
+          if (r) {
+            q = r;
+            removed.clear();
+            refreshTargets.clear();
+            ci = indexOfEntry(q, currentEntry);
+            if (dir === "prev" && ci < 0) ci = q.length;
+          }
+        }
       }
     } catch (e) {
       setMessage(String(e), "error");
@@ -839,6 +920,9 @@ export function WorkApp() {
       setRowPayload(payload);
       syncEditsFromPayload(payload);
       setMessage("");
+      // B: ジャンプ先が現在キュー内なら、次の対象行を先読みしておく。
+      prefetchRef.current = null;
+      if (idx >= 0) void doPrefetch(entry, q, options);
     } catch (e) {
       setMessage(String(e), "error");
     } finally {

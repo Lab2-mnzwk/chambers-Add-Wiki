@@ -43,20 +43,20 @@
 - 保存で Status が変わると `patchQueueIndex` が該当シートのキャッシュ status を更新する。
 - 保存（`saveRow`）は **patch 反映後の各シートのキャッシュから通しキューを再計算**して返す（`SaveResult.queue`）。index 未構築のシートはクライアントが送った `queue` の該当分をそのまま残す。
 - クライアントは保存応答の `queue` で `queueRows` を更新し、**移動は通しキュー上の「位置（index）」基準**で行う。「次の行」＝現在位置の次、「前の行」＝前。進捗フィルタ有効時、リストに無い＝対象外の行は移動時もスキップ。
-- **移動時の探索は途中行を描画しない**: `次の行` / `前の行` は、キュー上の次候補をメモリで特定し、進捗フィルタ有効時は status を確認して対象外なら描画せず次へ。**着地する行が決まって初めて `fetchRowPayload`（行全体）と `setRowPayload`** するため、スキップ中の途中行はちらつかない（探索中は「次/前の対象行を探索中…」表示）。進捗「すべて」のときはスキップ判定不要のため status 確認をせず、着地時の1回取得のみ。該当行が無ければ現在の表示行はそのまま維持（復元不要）。
-  - **status の確認はリクエスト数を抑える設計**（クォータ対策）:
-    - **A. 先読み一括取得（batch）**: 未取得の候補 status を、先の最大 `NAV_LOOKAHEAD`（=20）件まとめて **`POST /api/probe`（シートごとに 1 リクエスト＝batchGet 複数レンジ）** で取得する。1 件ずつ probe しない。
-    - **B. キャッシュ優先**: 行データがキャッシュ済みの候補は、サーバー側で **Sheets API を使わず**キャッシュから status を求める（`getRowStatuses`）。
-    - **C. 着地の二重取得排除**: 着地行は probe と本体の二重取得をせず、行全体を **1 回だけ**取得する（その status はメモへ反映）。
-    - **status メモ**: 取得済み status はクライアントの `statusMemoRef` に保持し、同一キュー内の再探索では再取得しない。**対象行リストを更新・保存・大量スキップ refresh でメモは破棄**（鮮度維持）。
-- **大量スキップ時の負荷軽減**: 1回の移動でライブ status スキップが `NAV_REFRESH_SKIP_THRESHOLD`（=5）以上に達したら、行を1件ずつ確認し続けず **スキップが発生したシートだけ** キュー index を再構築（`/api/queue?refresh=true&sheet=s12,s3`）して最新キューで一気にジャンプする。`sheet` 省略時は全シート refresh（手動「対象行リストを更新」等）。通常時（スキップ少）は発動しない。
+- **移動時の探索は途中行を描画しない**: `次の行` / `前の行` は、キュー上の次候補をメモリで特定し、進捗フィルタ有効時は status を確認して対象外なら描画せず次へ。**着地する行が決まって初めて描画**するため、スキップ中の途中行はちらつかない（探索中は「次/前の対象行を探索中…」表示）。該当行が無ければ現在の表示行はそのまま維持（復元不要）。
+  - **A. 探索を 1 リクエストに集約（`POST /api/navigate`）**: travel 方向の候補窓（最大 `NAV_WINDOW`=60 件）をサーバーに渡し、サーバー側で **status 一括取得（シートごと 1 batchGet・キャッシュ優先）＋スキップ判定＋着地行の全データ取得までを 1 リクエストで完結**して返す（`navigateToTarget`）。従来のクライアント probe→着地の往復（2〜3回）を **1 往復**に削減（Vercel でのコールドスタート/レイテンシ対策）。
+    - 窓内に着地が無ければ `landing=null` を返し、クライアントは全件スキップ扱いで次窓を要求。スキップ累計が `NAV_REFRESH_SKIP_THRESHOLD`（=5）に達したら **スキップが発生したシートだけ** index を再構築（`/api/queue?refresh=true&sheet=...`）して最新キューでジャンプする（大量スキップ時の負荷軽減）。
+    - 進捗「すべて」のときはスキップ判定不要のため status 取得をせず、窓先頭に即着地（着地行の 1 取得のみ）。
+  - **B. 次の対象行の先読み（プリフェッチ）**: 着地後、バックグラウンドで **次の対象行を `/api/navigate` で先読み**し `prefetchRef` に保持する。次の `次の行` が先読み済みなら **サーバー往復ゼロで即時着地**（体感の即時化）。初回キュー着地・「開く」後にも先読みする。
+  - **キャッシュ優先の status（B の基盤）**: 行データがキャッシュ済みの候補は、サーバー側で **Sheets API を使わず**キャッシュから status を求める（`getRowStatuses`）。
+  - **status メモ**: 取得済み status はクライアントの `statusMemoRef` に保持し、同一キュー内の再探索では再取得しない。**先読み結果（`prefetchRef`）ともども、対象行リストを更新・保存・大量スキップ refresh で破棄**（鮮度維持）。保存でキューが変わったときは先読みが無効化されるため、直後の移動は本探索にフォールバックする。
 - **移動時のキュー再取得は行わない**: 進捗「すべて」でも `次の行` / `前の行` のたびに `/api/queue` は呼ばない。キュー更新はフィルタ切替・保存応答・手動「対象行リストを更新」・大量スキップ refresh に限定する（外部編集の反映は「対象行リストを更新」またはアイドル明けの自動クリア）。
 - **応答順ガード（重要）**: `queueRows` を書き換える非同期処理（`loadQueue` / 保存応答）は世代カウンタ `queueWriteSeqRef` で管理し、**後発の書込のみ採用**。これにより、進捗フィルタ切替・作業者/インデックス変更・対象行リストを更新で `/api/queue` が短時間に複数飛んだ際に、**古い応答が後着で `queueRows` を上書きし、フィルタ設定と食い違う**不具合を防ぐ。
 - **サーバー既定**: `/api/queue` の `statusFilter` はパラメータ不正/欠落時 **`incomplete`（完了を除く）**。クライアントは常に明示送信。
 
 ##### キャッシュ鮮度（外部編集への追従）
 
-- **保存時に status を自己修復**: `saveRow` は Status 変更を nav キャッシュ（`patchQueueIndex`）へ反映する。移動探索（`getRowProbe`）は **読み取り専用**でライブ status を都度確認するため、アプリ外で完了になった行も探索時に必ずスキップされる（キャッシュは書き換えないが着地しない）。キュー件数の表示ずれは「対象行リストを更新」で解消。
+- **保存時に status を自己修復**: `saveRow` は Status 変更を nav キャッシュ（`patchQueueIndex`）と rows キャッシュ（`patchRowValues`）へ反映するため、アプリ内の完了は即スキップ対象になる。移動探索（`getRowStatuses`）は **キャッシュ優先**で、未キャッシュ行はライブ status を取得する。アプリ外（シート直接編集）で完了にした **キャッシュ済み行** は次の「対象行リストを更新」・アイドルクリアまで反映されないことがある。キュー件数の表示ずれも「対象行リストを更新」で解消。
 - **SheetRules のメモリキャッシュ**: `buildSheetRules` の結果はシートごとにメモリ保持し、ヘッダー不変の間は再利用する（`work-service.ts` の `rulesCache`）。
 - **「対象行リストを更新」は強制リフレッシュ**: ボタン押下時は `/api/queue?...&refresh=true` で `getQueue(options, true)` を呼び、キャッシュを無視して **シートから index（連番/status/assignee）を 1 回の batchGet で取り直す**。これでアプリ外の完了も含めて即座に反映される（行データ・構造・Wiki 履歴は保持＝軽量）。
 - 通常の読込（作業者切替・進捗フィルタ/`indexRows` 変更など）はキャッシュ利用（`refresh` なし）でシート I/O を抑える。フィルタが「効かない」場合は、外部編集でキャッシュが古い可能性があるため「対象行リストを更新」を実行する。
@@ -67,9 +67,9 @@
 
 ##### 性能設計（キャッシュの用途別分割）
 
-- 目的: 行移動のホットパス（`getRowProbe` / `getRow`）で **巨大な `queueIndex`（最大 30,000 行）や `wikiHistory` を毎回シリアライズして書き戻さない**こと。以前は 1 シート 1 ファイルの全部入りで、行を開くたびに全体を read/write していた（書き込み増幅）。
+- 目的: 行移動のホットパス（`navigateToTarget` / `getRowStatuses` / `getRow`）で **巨大な `queueIndex`（最大 30,000 行）や `wikiHistory` を毎回シリアライズして書き戻さない**こと。以前は 1 シート 1 ファイルの全部入りで、行を開くたびに全体を read/write していた（書き込み増幅）。
 - 用途別ファイルへ分割（`store.ts`）: **struct / nav / rows / wiki / meta**。各操作は関係するファイルだけを触る。
-  - `getRowProbe` / `getRowStatuses`: **書き込みゼロ**（Status 取得 + `meta` の時刻更新のみ）。`getRowStatuses` は複数行を 1 リクエストで取得し、キャッシュ済み行は API を使わない。
+  - `navigateToTarget`（`POST /api/navigate`）: 候補窓の status を `getRowStatuses` で取り（**書き込みゼロ**・キャッシュ優先 + シートごと 1 batchGet）、スキップ判定して着地行を `getRow` で取得する。移動探索の Sheets 往復を 1 回に集約。
   - `getRow`: 取得した行を **rows ファイルにその行だけ**書く（nav/wiki は触らない）。
   - `getQueue`: nav を読んで絞り込み（refresh 時のみ nav を再構築）。
   - `saveRow`: rows（該当行）+ wiki（学習）+ nav（Status パッチ）を更新（保存は低頻度）。
@@ -232,6 +232,7 @@ UI の選択値（`ColumnMode`）は内部フラグへ次のように対応（`s
 | 列ルールの構造検出 | `src/lib/sheet-rules.ts`（`buildSheetRules`） |
 | 列ルール | `src/lib/columns.ts` |
 | Sheets API | `src/lib/sheets.ts`, `src/lib/work-service.ts` |
+| 移動探索の集約（A） | `src/app/api/navigate/route.ts`, `navigateToTarget`（`work-service.ts`） |
 | 認証・トークン更新 | `src/auth.ts`, `src/lib/google-session.ts`, `src/lib/api-error.ts` |
 | UI | `src/components/WorkApp.tsx`, `WorkRowTable.tsx` |
 | 検索リンク | `src/lib/search-links.ts` |

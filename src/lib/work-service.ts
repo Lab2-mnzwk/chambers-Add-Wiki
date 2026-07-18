@@ -6,7 +6,9 @@ import {
   ENABLE_SHEET_WRITES,
   getSheetById,
   IDLE_CACHE_CLEAR_MS,
+  isDoneStatus,
   SPREADSHEET_DISPLAY_TITLE,
+  STATUS_NOT_STARTED,
   WORK_SHEETS,
   WORK_STATUS_OPTIONS,
   workSheetEditUrl,
@@ -55,6 +57,7 @@ import {
 } from "./store";
 import type {
   BootstrapPayload,
+  NavigateResult,
   QueueEntry,
   RowPayload,
   RowProbePayload,
@@ -318,6 +321,66 @@ export async function getRowStatuses(
   }
   touchLastAccessAt(sheet.id);
   return { sheet: sheet.id, statuses };
+}
+
+/** 進捗フィルタで、この Status の行を移動時にスキップすべきか（クライアントと同一判定）。 */
+function shouldSkipStatus(
+  status: string,
+  statusFilter: WorkOptions["statusFilter"]
+): boolean {
+  if (statusFilter === "incomplete") return isDoneStatus(status);
+  if (statusFilter === "notStarted") return status.trim() !== STATUS_NOT_STARTED;
+  return false;
+}
+
+/**
+ * A: 移動探索の集約。候補（travel 方向に並んだ行）を順に走査し、進捗フィルタで
+ * スキップすべき行を飛ばして **最初の着地行を1リクエストで確定し、その全データも返す**。
+ * status はキャッシュ優先 + シートごと1回の batchGet で取得（Sheets 往復を最小化）。
+ * 窓内に着地が無ければ landing=null（呼び出し側が次窓を要求 or refresh する）。
+ */
+export async function navigateToTarget(
+  candidates: QueueEntry[],
+  statusFilter: WorkOptions["statusFilter"],
+  rowOpts: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode" | "showNamedTriplets">
+): Promise<NavigateResult> {
+  const statuses: Record<string, string> = {};
+  const filtered = statusFilter !== "all";
+
+  if (filtered && candidates.length) {
+    const bySheet = new Map<string, number[]>();
+    for (const c of candidates) {
+      const list = bySheet.get(c.sheet) ?? [];
+      list.push(c.row);
+      bySheet.set(c.sheet, list);
+    }
+    for (const [sheet, rows] of bySheet) {
+      const { statuses: st } = await getRowStatuses(sheet, rows);
+      for (const [row, s] of Object.entries(st)) statuses[`${sheet}#${row}`] = s;
+    }
+  }
+
+  let landingIndex = -1;
+  for (let i = 0; i < candidates.length; i++) {
+    if (!filtered) {
+      landingIndex = i;
+      break;
+    }
+    const c = candidates[i];
+    const status = statuses[`${c.sheet}#${c.row}`] ?? "";
+    if (!shouldSkipStatus(status, statusFilter)) {
+      landingIndex = i;
+      break;
+    }
+  }
+
+  if (landingIndex < 0) {
+    return { landing: null, landingIndex: -1, payload: null, statuses };
+  }
+
+  const landing = candidates[landingIndex];
+  const payload = await getRow(landing.sheet, landing.row, rowOpts);
+  return { landing, landingIndex, payload, statuses };
 }
 
 export async function getRow(

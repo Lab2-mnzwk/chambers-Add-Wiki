@@ -118,6 +118,21 @@ export type RowProbePayload = {
   status: string;
 };
 
+/**
+ * 移動探索の集約応答（A）。候補列を順に走査してスキップ判定し、
+ * 最初に着地する行の payload をまとめて返す（往復を1回に集約）。
+ */
+export type NavigateResult = {
+  /** 着地行（見つからなければ null）。 */
+  landing: QueueEntry | null;
+  /** candidates 内での着地インデックス（見つからなければ -1）。 */
+  landingIndex: number;
+  /** 着地行の全データ（landing が null なら null）。 */
+  payload: RowPayload | null;
+  /** 取得できた候補の作業 Status（キー: `${sheet}#${row}`）。 */
+  statuses: Record<string, string>;
+};
+
 export type SheetInfo = {
   id: string;
   label: string;
