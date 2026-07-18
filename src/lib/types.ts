@@ -128,11 +128,12 @@ export type RowPayload = {
   wikiLearning: WikiLearningSnapshot[];
 };
 
-/** 移動探索用の軽量応答（作業 Status のみ。行全体は取得しない）。 */
+/** 移動探索用の軽量応答（Status / Assignee のみ。行全体は取得しない）。 */
 export type RowProbePayload = {
   sheet: string;
   sheetRowNumber: number;
   status: string;
+  assignee: string;
 };
 
 /**

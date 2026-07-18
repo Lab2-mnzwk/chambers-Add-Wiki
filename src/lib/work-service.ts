@@ -28,7 +28,7 @@ import {
   executeWritePlan,
   fetchCandidateRowValues,
   fetchQueueIndex,
-  fetchRowStatus,
+  fetchRowStatusAndAssignee,
   fetchRowStatuses,
   fetchRowValues,
   fetchWikiHistoryFromSheet,
@@ -405,10 +405,15 @@ export async function getRowProbe(
   const sheet = getSheetById(sheetId) ?? DEFAULT_SHEET;
   const structure = await ensureStructure(sheet);
   const rules = rulesFor(sheet, structure);
-  // 探索は読み取り専用: 作業 Status の 1 セルのみ取得し、巨大な nav キャッシュは書き換えない。
-  const status = await fetchRowStatus(sheet, rules, sheetRowNumber);
+  // 探索は読み取り専用: 判定に必要な Status / Assignee の2セルだけ取得し、
+  // 巨大な nav キャッシュは書き換えない。
+  const { status, assignee } = await fetchRowStatusAndAssignee(
+    sheet,
+    rules,
+    sheetRowNumber
+  );
   touchLastAccessAt(sheet.id);
-  return { sheet: sheet.id, sheetRowNumber, status };
+  return { sheet: sheet.id, sheetRowNumber, status, assignee };
 }
 
 /**
@@ -527,7 +532,9 @@ export async function getRow(
   sheetId: string,
   sheetRowNumber: number,
   options: Pick<WorkOptions, "lightBlueOnly" | "fullEditMode" | "showNamedTriplets">,
-  forceFresh = false
+  forceFresh = false,
+  // 背景の裏読み用: レート制限（429）時にリトライで粘らず即諦める。
+  background = false
 ): Promise<RowPayload> {
   const sheet = getSheetById(sheetId) ?? DEFAULT_SHEET;
   const structure = await ensureStructure(sheet);
@@ -538,7 +545,9 @@ export async function getRow(
     const sharedKey = sharedCacheKey("row", sheet.id, sheetRowNumber);
     rowValues = forceFresh ? null : await sharedGetJson<string[]>(sharedKey);
     if (!rowValues) {
-      rowValues = await fetchRowValues(sheet, structure, sheetRowNumber);
+      rowValues = await fetchRowValues(sheet, structure, sheetRowNumber, {
+        noRetry: background,
+      });
       // 同一行の保存直後は、レスポンス後の旧共有キー削除と競合させない。
       if (!forceFresh) await sharedSetJson(sharedKey, rowValues, 60);
     }

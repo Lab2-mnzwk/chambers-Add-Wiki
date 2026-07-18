@@ -131,15 +131,20 @@ export async function withSheetsAccessToken<T>(work: () => Promise<T>): Promise<
   return requestAccessToken.run(token, work);
 }
 
+/** 429/503 リトライ前の最大待ち時間。Retry-After が長くてもこれ以上は待たない。 */
+const RETRY_WAIT_CAP_MS = 2000;
+
 async function sheetsFetch<T>(
   pathAndQuery: string,
   init: RequestInit = {},
-  accessToken?: string
+  accessToken?: string,
+  opts?: { noRetry?: boolean }
 ): Promise<T> {
   const token =
     accessToken ?? requestAccessToken.getStore() ?? (await getAccessToken());
   let response: Response | null = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const maxAttempts = opts?.noRetry ? 1 : 2;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     response = await fetch(`https://sheets.googleapis.com/v4/${pathAndQuery}`, {
       ...init,
       headers: {
@@ -149,11 +154,20 @@ async function sheetsFetch<T>(
       },
     });
     if (response.ok) return (await response.json()) as T;
-    if (![429, 503].includes(response.status) || attempt > 0) break;
+    if (![429, 503].includes(response.status) || attempt >= maxAttempts - 1) {
+      break;
+    }
     const retryAfter = Number(response.headers.get("retry-after") ?? 0);
-    await new Promise((resolve) =>
-      setTimeout(resolve, retryAfter > 0 ? retryAfter * 1000 : 300 + Math.random() * 300)
+    // Retry-After をそのまま待つと10秒超のフリーズ感になるため上限を設ける。
+    const waitMs =
+      retryAfter > 0
+        ? Math.min(retryAfter * 1000, RETRY_WAIT_CAP_MS)
+        : 300 + Math.random() * 300;
+    console.warn(
+      `[sheets] ${response.status} on ${pathAndQuery.split("?")[0]} ` +
+        `(retry-after=${retryAfter || "-"}s) -> retry in ${Math.round(waitMs)}ms`
     );
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
   const text = await response!.text();
   let message = text;
@@ -172,9 +186,10 @@ function valuesPath(range: string): string {
 
 async function getValues(
   range: string,
-  accessToken?: string
+  accessToken?: string,
+  opts?: { noRetry?: boolean }
 ): Promise<GoogleValueRange> {
-  return sheetsFetch<GoogleValueRange>(valuesPath(range), {}, accessToken);
+  return sheetsFetch<GoogleValueRange>(valuesPath(range), {}, accessToken, opts);
 }
 
 async function batchGetValues(
@@ -417,6 +432,39 @@ export async function fetchRowStatus(
 }
 
 /**
+ * 移動判定に必要な Status / Assignee の2セルだけを 1 リクエスト（batchGet）で取得する。
+ * フル行読みを着地行だけに限定するための軽量 probe。
+ */
+export async function fetchRowStatusAndAssignee(
+  sheet: SheetConfig,
+  rules: SheetRules,
+  sheetRowNumber: number
+): Promise<{ status: string; assignee: string }> {
+  const cells: { key: "status" | "assignee"; letter: string }[] = [];
+  if (rules.statusUnique) {
+    const idx = rules.uniqueHeaders.indexOf(rules.statusUnique);
+    if (idx >= 0) cells.push({ key: "status", letter: columnLetter(idx + 1) });
+  }
+  if (rules.assigneeUnique) {
+    const idx = rules.uniqueHeaders.indexOf(rules.assigneeUnique);
+    if (idx >= 0) cells.push({ key: "assignee", letter: columnLetter(idx + 1) });
+  }
+  const result = { status: "", assignee: "" };
+  if (!cells.length) return result;
+  const ranges = cells.map(
+    ({ letter }) =>
+      `'${sheet.name}'!${letter}${sheetRowNumber}:${letter}${sheetRowNumber}`
+  );
+  const batch = await batchGetValues(ranges);
+  cells.forEach(({ key }, index) => {
+    result[key] = String(
+      batch.valueRanges?.[index]?.values?.[0]?.[0] ?? ""
+    ).trim();
+  });
+  return result;
+}
+
+/**
  * 複数行の作業 Status を **1 リクエスト**（batchGet 複数レンジ）で取得（移動探索の先読み用）。
  * レンジ数が多い場合はチャンク分割して複数回に分ける。
  */
@@ -448,12 +496,15 @@ export async function fetchRowStatuses(
 export async function fetchRowValues(
   sheet: SheetConfig,
   structure: SheetStructure,
-  sheetRowNumber: number
+  sheetRowNumber: number,
+  opts?: { noRetry?: boolean }
 ): Promise<string[]> {
   const readCount = effectiveColCount(structure.colCount, structure.uniqueHeaders);
   const endCol = columnLetter(readCount);
   const resp = await getValues(
-    `'${sheet.name}'!A${sheetRowNumber}:${endCol}${sheetRowNumber}`
+    `'${sheet.name}'!A${sheetRowNumber}:${endCol}${sheetRowNumber}`,
+    undefined,
+    opts
   );
   return (resp.values?.[0] ?? []).map((v) => String(v ?? ""));
 }

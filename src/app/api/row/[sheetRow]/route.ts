@@ -25,6 +25,8 @@ export async function GET(
       request.nextUrl.searchParams.get("showNamedTriplets") === "true";
     const forceFresh =
       request.nextUrl.searchParams.get("fresh") === "true";
+    const background =
+      request.nextUrl.searchParams.get("bg") === "true";
     const payload = await getRow(
       sheet,
       sheetRowNumber,
@@ -33,7 +35,8 @@ export async function GET(
         fullEditMode,
         showNamedTriplets,
       },
-      forceFresh
+      forceFresh,
+      background
     );
     return NextResponse.json(payload);
   } catch (e) {

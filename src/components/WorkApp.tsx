@@ -10,6 +10,7 @@ import type {
   CompactQueue,
   QueueEntry,
   RowPayload,
+  RowProbePayload,
   SaveMoveAction,
   SaveMoveResponse,
   SavePayload,
@@ -54,6 +55,13 @@ const navFilterKey = (opts: WorkOptions) =>
     opts.fullEditMode,
     opts.showNamedTriplets,
   ].join("|");
+
+/** 行 payload の形が変わる表示条件だけのキー（訪問済みキャッシュの有効判定用）。 */
+const rowOptionsKey = (opts: WorkOptions) =>
+  [opts.lightBlueOnly, opts.fullEditMode, opts.showNamedTriplets].join("|");
+
+/** 「前の行」等で直近訪問行へ API 往復なしで戻るための保持件数。 */
+const VISITED_CACHE_LIMIT = 10;
 
 // travel 方向に並ぶ候補（removed を除く）を最大 NAV_WINDOW 件集める。
 const collectWindow = (
@@ -137,7 +145,8 @@ function optionsQuery(options: WorkOptions): string {
 function rowQuery(
   sheet: string,
   options: WorkOptions,
-  fresh = false
+  fresh = false,
+  background = false
 ): string {
   const params = new URLSearchParams({
     sheet,
@@ -145,8 +154,10 @@ function rowQuery(
     fullEditMode: String(options.fullEditMode),
     showNamedTriplets: String(options.showNamedTriplets),
   });
-  // 移動・裏読みはシート最新で絞り込み判定するためキャッシュを使わない。
+  // 鮮度が必須の読みだけキャッシュを使わない。
   if (fresh) params.set("fresh", "true");
+  // 背景の裏読みはレート制限時にリトライで粘らない。
+  if (background) params.set("bg", "true");
   return params.toString();
 }
 
@@ -208,20 +219,45 @@ function statusMatchesFilter(
   return true;
 }
 
-/** キャッシュ信頼移動: 着地行のライブ値だけ見て、絞り込み対象外ならスキップする。 */
-function payloadMatchesNav(payload: RowPayload, opts: WorkOptions): boolean {
-  const status =
-    payload.columns.find((column) => column.isStatus)?.value ?? "";
+/** 移動判定: Status / Assignee のライブ値が現在の絞り込みに合うか。 */
+function statusAssigneeMatchesNav(
+  status: string,
+  assignee: string,
+  opts: WorkOptions
+): boolean {
   if (!statusMatchesFilter(status, opts.statusFilter)) return false;
   if (
     opts.worker &&
     opts.worker !== ASSIGN_ALL_ROWS_NAME &&
-    payload.assignee &&
-    payload.assignee !== opts.worker
+    assignee &&
+    assignee !== opts.worker
   ) {
     return false;
   }
   return true;
+}
+
+/** キャッシュ信頼移動: 着地行の値だけ見て、絞り込み対象外ならスキップする。 */
+function payloadMatchesNav(payload: RowPayload, opts: WorkOptions): boolean {
+  const status =
+    payload.columns.find((column) => column.isStatus)?.value ?? "";
+  return statusAssigneeMatchesNav(status, payload.assignee, opts);
+}
+
+/** 保存済みの編集値を payload の列値・Wiki学習データへ反映する（訪問済みキャッシュ更新用）。 */
+function applySavedEditsToPayload(
+  payload: RowPayload,
+  updates: Record<string, string>
+): RowPayload {
+  const withWiki = applyWikiLearningEdits(payload, updates);
+  return {
+    ...withWiki,
+    columns: withWiki.columns.map((column) =>
+      updates[column.uniqueName] !== undefined
+        ? { ...column, value: updates[column.uniqueName] }
+        : column
+    ),
+  };
 }
 
 function applyWikiLearningEdits(
@@ -398,12 +434,34 @@ export function WorkApp() {
   /** 現在の絞り込み条件だけで、次方向の候補窓を裏読みする。 */
   const nextPrefetchRef = useRef<NextPrefetch | null>(null);
   const nextPrefetchSeqRef = useRef(0);
+  /** 楽観着地後の背景保存。完了までは次の「編集あり」の保存・移動操作を直列化する。 */
+  const pendingSaveRef = useRef<Promise<boolean> | null>(null);
+  /** 背景保存失敗でロールバックした回数。進行中の移動処理が着地を破棄する判定に使う。 */
+  const rollbackSeqRef = useRef(0);
+  /**
+   * 背景保存の成功でキューから外した行キー。並走中の移動が古いキュー
+   * スナップショットで着地しても、除外済み行を復活させないためのガード。
+   */
+  const backgroundRemovedKeysRef = useRef<Set<string>>(new Set());
+  /**
+   * 直近に表示した行の payload（LRU）。「前の行」で戻るときに probe も
+   * フル読みも省いて即着地する。保存成功時は保存値でパッチして鮮度を保つ。
+   */
+  const visitedPayloadsRef = useRef<
+    Map<string, { optionsKey: string; payload: RowPayload }>
+  >(new Map());
 
   const currentEntry = useMemo<QueueEntry | null>(() => {
     if (historyIndex >= 0 && history[historyIndex]) return history[historyIndex];
     if (queueRows.length) return queueRows[queueIndex] ?? null;
     return null;
   }, [history, historyIndex, queueRows, queueIndex]);
+
+  /** 背景保存の失敗処理から現在表示中の行を参照するための ref。 */
+  const currentEntryRef = useRef<QueueEntry | null>(null);
+  useEffect(() => {
+    currentEntryRef.current = currentEntry;
+  }, [currentEntry]);
 
   const dirty = useMemo(
     () => editsDiffer(edits, originalEdits),
@@ -502,9 +560,28 @@ export function WorkApp() {
     };
   }, []);
 
+  const messageSeqRef = useRef(0);
+
   const setMessage = (text: string, kind: "" | "ok" | "error" = "") => {
+    messageSeqRef.current += 1;
     setStatus(text);
     setStatusKind(kind);
+  };
+
+  /**
+   * 完了通知を短時間表示して自動で消す。処理済みだと分かりやすくするための表示。
+   * 表示中に別のメッセージへ切り替わっていた場合は消去しない（新しい表示を優先）。
+   */
+  const flashMessage = (
+    text: string,
+    kind: "" | "ok" | "error" = "ok",
+    ms = 1600
+  ) => {
+    setMessage(text, kind);
+    const seq = messageSeqRef.current;
+    window.setTimeout(() => {
+      if (messageSeqRef.current === seq) setMessage("");
+    }, ms);
   };
 
   const showToast = (text: string) => {
@@ -551,14 +628,39 @@ export function WorkApp() {
     async (
       entry: QueueEntry,
       opts: WorkOptions,
-      fresh = false
+      fresh = false,
+      background = false
     ): Promise<RowPayload> => {
       const res = await fetch(
-        `/api/row/${entry.row}?${rowQuery(entry.sheet, opts, fresh)}`
+        `/api/row/${entry.row}?${rowQuery(entry.sheet, opts, fresh, background)}`
       );
       return readApiResponse<RowPayload>(res, "行の読み込みに失敗");
     },
     []
+  );
+
+  /** 移動判定用の軽量 probe（Status / Assignee の2セルだけをライブ取得）。 */
+  const fetchRowProbe = useCallback(
+    async (entry: QueueEntry): Promise<RowProbePayload> => {
+      const res = await fetch(
+        `/api/row/${entry.row}?sheet=${encodeURIComponent(entry.sheet)}&probe=true`
+      );
+      return readApiResponse<RowProbePayload>(res, "行の確認に失敗");
+    },
+    []
+  );
+
+  /**
+   * 着地行の表示データ取得。probe でライブ判定済みなのでキャッシュを許容し、
+   * キャッシュ値が絞り込みと矛盾するときだけ最新を取り直す。
+   */
+  const fetchLandingPayload = useCallback(
+    async (entry: QueueEntry, opts: WorkOptions): Promise<RowPayload> => {
+      const cached = await fetchRowPayload(entry, opts, false);
+      if (payloadMatchesNav(cached, opts)) return cached;
+      return fetchRowPayload(entry, opts, true);
+    },
+    [fetchRowPayload]
   );
 
   const clearNextPrefetch = useCallback(() => {
@@ -584,7 +686,9 @@ export function WorkApp() {
         target,
       };
       nextPrefetchRef.current = entry;
-      entry.promise = fetchRowPayload(target, opts, true)
+      // 裏読みはキャッシュ許容（自分の保存はキャッシュへ反映済み）。
+      // レート制限時は粘らず諦め、着地時の通常経路に任せる（bg=true）。
+      entry.promise = fetchRowPayload(target, opts, false, true)
         .then((payload) => {
           if (
             nextPrefetchSeqRef.current !== seq ||
@@ -625,22 +729,67 @@ export function WorkApp() {
     []
   );
 
+  /** 表示した行を訪問済みキャッシュ（LRU）へ記録する。 */
+  const rememberVisitedPayload = useCallback(
+    (entry: QueueEntry, payload: RowPayload, opts: WorkOptions) => {
+      const map = visitedPayloadsRef.current;
+      const key = entryKey(entry);
+      map.delete(key);
+      map.set(key, { optionsKey: rowOptionsKey(opts), payload });
+      while (map.size > VISITED_CACHE_LIMIT) {
+        const oldest = map.keys().next().value;
+        if (oldest === undefined) break;
+        map.delete(oldest);
+      }
+    },
+    []
+  );
+
+  /** 表示条件が一致する訪問済み payload があれば返す（LRU 位置は更新しない）。 */
+  const takeVisitedPayload = useCallback(
+    (entry: QueueEntry, opts: WorkOptions): RowPayload | null => {
+      const hit = visitedPayloadsRef.current.get(entryKey(entry));
+      if (!hit || hit.optionsKey !== rowOptionsKey(opts)) return null;
+      return hit.payload;
+    },
+    []
+  );
+
+  /** 保存成功時に訪問済みキャッシュの該当行へ保存値を反映する。 */
+  const patchVisitedPayload = useCallback(
+    (entry: QueueEntry, updates: Record<string, string>) => {
+      const key = entryKey(entry);
+      const hit = visitedPayloadsRef.current.get(key);
+      if (!hit) return;
+      visitedPayloadsRef.current.set(key, {
+        ...hit,
+        payload: applySavedEditsToPayload(hit.payload, updates),
+      });
+    },
+    []
+  );
+
   const loadRow = useCallback(
     async (entry: QueueEntry, opts: WorkOptions): Promise<RowPayload> => {
       setMessage("行を読み込み中…");
       const data = await fetchRowPayload(entry, opts);
       setRowPayload(data);
       syncEditsFromPayload(data);
+      rememberVisitedPayload(entry, data, opts);
       setMessage("");
       return data;
     },
-    [fetchRowPayload]
+    [fetchRowPayload, rememberVisitedPayload]
   );
 
   const loadQueue = useCallback(
     async (opts: WorkOptions, keepPosition: boolean, forceRefresh = false) => {
       const seq = ++queueWriteSeqRef.current;
       clearNextPrefetch();
+      // サーバーから取り直すキューが最新なので、背景保存由来の除外ガードは破棄。
+      backgroundRemovedKeysRef.current = new Set();
+      // 鮮度確保の操作なので、訪問済み行のローカル保持も破棄する。
+      if (forceRefresh) visitedPayloadsRef.current = new Map();
       setMessage("キューを読み込み中…");
       const qs = optionsQuery(opts) + (forceRefresh ? "&refresh=true" : "");
       const res = await fetch(`/api/queue?${qs}`);
@@ -835,7 +984,19 @@ export function WorkApp() {
     if (seq === queueWriteSeqRef.current) setQueueRows(nextQueueRows);
     if (rowPayload) setRowPayload(applyWikiLearningEdits(rowPayload, updates));
     setOriginalEdits(edits);
+    // 訪問済みキャッシュにも保存値を反映し、「前の行」で戻ったときの鮮度を保つ。
+    patchVisitedPayload(entry, updates);
     return nextQueueRows;
+  };
+
+  /**
+   * 楽観着地の背景保存が残っていれば完了を待つ。
+   * 失敗時はロールバックまたは通知済みなので false（後続操作は中止）。
+   */
+  const awaitPendingSave = async (): Promise<boolean> => {
+    const pending = pendingSaveRef.current;
+    if (!pending) return true;
+    return pending;
   };
 
   /**
@@ -847,6 +1008,7 @@ export function WorkApp() {
     queueRows: QueueEntry[];
   }> => {
     if (!currentEntry || !dirty) return { ok: true, queueRows };
+    if (!(await awaitPendingSave())) return { ok: false, queueRows };
     const seq = ++queueWriteSeqRef.current;
     setMessage("保存中…");
     try {
@@ -864,7 +1026,7 @@ export function WorkApp() {
         queueRows,
         seq
       );
-      setMessage(`${data.savedCells} セルを保存しました。`, "ok");
+      flashMessage(`${data.savedCells} セルを保存しました。`);
       return { ok: true, queueRows: nextQueueRows };
     } catch (e) {
       setMessage(String(e), "error");
@@ -888,6 +1050,7 @@ export function WorkApp() {
   ): Promise<QueueEntry[] | null> => {
     try {
       clearNextPrefetch();
+      backgroundRemovedKeysRef.current = new Set();
       const sheetParam =
         sheets && sheets.length
           ? `&sheet=${sheets.map(encodeURIComponent).join(",")}`
@@ -918,9 +1081,14 @@ export function WorkApp() {
     removed: Set<string>
   ) => {
     removedNavigationAnchorRef.current = null;
-    const finalQ = q.filter((e) => !removed.has(entryKey(e)));
+    // 並走した背景保存でキューから外れた行は、古いスナップショットから復活させない。
+    const bgRemoved = backgroundRemovedKeysRef.current;
+    const finalQ = q.filter(
+      (e) => !removed.has(entryKey(e)) && !bgRemoved.has(entryKey(e))
+    );
     setRowPayload(payload);
     syncEditsFromPayload(payload);
+    rememberVisitedPayload(cand, payload, options);
     setMessage("");
     setQueueRows(finalQ);
     const nextHistory = history.slice(0, historyIndex + 1);
@@ -937,6 +1105,10 @@ export function WorkApp() {
     if (loading) return;
     setLoading(true);
     try {
+      // 編集ありの移動だけ、直前の背景保存の完了を待って直列化する。
+      // 編集なしの移動は前行の保存と競合しないため待たずに進む（案a）。
+      if (dirty && !(await awaitPendingSave())) return;
+      const rollbackSeqAtStart = rollbackSeqRef.current;
       const queueBeforeSave = queueRows;
       const entryBeforeSave = currentEntry;
       const positionQueue =
@@ -973,8 +1145,94 @@ export function WorkApp() {
           dir === "next" && firstTarget
             ? await takeNextPrefetch(entryBeforeSave, firstTarget, options)
             : null;
+        // 裏読み（次方向）または訪問済みキャッシュ（前方向含む）があれば即着地できる。
+        const instantPayload =
+          prefetched ??
+          (firstTarget ? takeVisitedPayload(firstTarget, options) : null);
 
-        if (prefetched && firstTarget) {
+        if (
+          instantPayload &&
+          firstTarget &&
+          payloadMatchesNav(instantPayload, options)
+        ) {
+          // 楽観着地: 手元の次/前行を先に表示し、保存は背景で完了させる。
+          const rollback = {
+            payload: rowPayload,
+            edits,
+            originalEdits,
+            history,
+            historyIndex,
+            queueIndex,
+            queue: queueBeforeSave,
+          };
+          landOn(firstTarget, instantPayload, q, removed);
+          setMessage("保存中…");
+          const savePromise = (async (): Promise<boolean> => {
+            try {
+              const res = await fetch("/api/save", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(
+                  buildCurrentSavePayload(entryBeforeSave, updates)
+                ),
+              });
+              const saveResult = await readApiResponse<SaveResult>(
+                res,
+                "保存に失敗"
+              );
+              // 保存行が絞り込みから外れたら、背景でキューから除く。
+              if (
+                saveResult.status !== undefined &&
+                !statusMatchesFilter(saveResult.status, options.statusFilter)
+              ) {
+                backgroundRemovedKeysRef.current.add(entryKey(entryBeforeSave));
+                setQueueRows((prev) =>
+                  prev.filter(
+                    (candidate) =>
+                      entryKey(candidate) !== entryKey(entryBeforeSave)
+                  )
+                );
+              }
+              patchVisitedPayload(entryBeforeSave, updates);
+              flashMessage(`${saveResult.savedCells} セルを保存しました。`);
+              return true;
+            } catch (e) {
+              const stillOnLanded =
+                currentEntryRef.current &&
+                entryKey(currentEntryRef.current) === entryKey(firstTarget);
+              if (stillOnLanded) {
+                // ロールバック: 元の行と未保存編集へ戻す（移動先で行った編集は破棄）。
+                rollbackSeqRef.current += 1;
+                clearNextPrefetch();
+                setQueueRows(rollback.queue);
+                setHistory(rollback.history);
+                setHistoryIndex(rollback.historyIndex);
+                setQueueIndex(rollback.queueIndex);
+                setRowPayload(rollback.payload);
+                setEdits(rollback.edits);
+                setOriginalEdits(rollback.originalEdits);
+                setMessage(
+                  `保存に失敗したため元の行に戻しました: ${String(e)}`,
+                  "error"
+                );
+              } else {
+                // 既に別の行へ移動済み: 画面は動かさず通知のみ。編集は保存されていない。
+                setMessage(
+                  `行 ${entryBeforeSave.row} の保存に失敗しました。該当行を開き直して再入力してください: ${String(e)}`,
+                  "error"
+                );
+              }
+              return false;
+            } finally {
+              pendingSaveRef.current = null;
+            }
+          })();
+          pendingSaveRef.current = savePromise;
+          return;
+        }
+
+        if (instantPayload && firstTarget) {
+          // 手元データはあるが移動先が絞り込み外: 保存を待ってからスキップ探索を続ける。
           setMessage("保存中…");
           try {
             const res = await fetch("/api/save", {
@@ -996,10 +1254,6 @@ export function WorkApp() {
               seq
             );
             markRemovedAnchor(q);
-            if (payloadMatchesNav(prefetched, options)) {
-              landOn(firstTarget, prefetched, q, removed);
-              return;
-            }
             removed.add(entryKey(firstTarget));
             refreshTargets.add(firstTarget.sheet);
             skipped += 1;
@@ -1121,12 +1375,29 @@ export function WorkApp() {
           dir === "next" && fromForPrefetch && skipped === 0 && removed.size === 0
             ? await takeNextPrefetch(fromForPrefetch, target, options)
             : null;
-        const payload =
-          prefetched ?? (await fetchRowPayload(target, options, true));
 
-        if (payloadMatchesNav(payload, options)) {
-          landOn(target, payload, q, removed);
-          return;
+        // 裏読み → 訪問済みキャッシュ → probe の順で軽い判定から使う。
+        const localPayload =
+          prefetched ?? takeVisitedPayload(target, options);
+        if (localPayload) {
+          if (payloadMatchesNav(localPayload, options)) {
+            // 背景保存の失敗でロールバック済みなら、この着地は破棄する。
+            if (rollbackSeqRef.current !== rollbackSeqAtStart) return;
+            landOn(target, localPayload, q, removed);
+            return;
+          }
+        } else {
+          // 判定は Status/Assignee の2セルだけライブ確認し、フル読みは着地行に限る。
+          const probe = await fetchRowProbe(target);
+          if (statusAssigneeMatchesNav(probe.status, probe.assignee, options)) {
+            const payload = await fetchLandingPayload(target, options);
+            if (payloadMatchesNav(payload, options)) {
+              // 背景保存の失敗でロールバック済みなら、この着地は破棄する。
+              if (rollbackSeqRef.current !== rollbackSeqAtStart) return;
+              landOn(target, payload, q, removed);
+              return;
+            }
+          }
         }
 
         removed.add(entryKey(target));
@@ -1173,6 +1444,8 @@ export function WorkApp() {
     if (loading) return;
     setLoading(true);
     try {
+      // 編集ありのジャンプだけ、直前の背景保存の完了を待って直列化する。
+      if (dirty && !(await awaitPendingSave())) return;
       const entry: QueueEntry = { sheet: sheetId, row: target };
       const queueBeforeSave = queueRows;
       const entryBeforeSave = currentEntry;
@@ -1257,6 +1530,7 @@ export function WorkApp() {
       }
       setRowPayload(payload);
       syncEditsFromPayload(payload);
+      rememberVisitedPayload(entry, payload, options);
       setMessage("");
       warmNextPrefetch(entry, q, options);
     } catch (e) {
@@ -1289,6 +1563,11 @@ export function WorkApp() {
         method: "DELETE",
       });
       if (!res.ok) throw new Error("キャッシュの更新に失敗");
+      // 行データを破棄したら、クライアント側の訪問済み保持・裏読みも破棄する。
+      if (target === "all" || target === "rows") {
+        visitedPayloadsRef.current = new Map();
+        clearNextPrefetch();
+      }
       setMessage(`${labels[target]}を更新しました。`, "ok");
       // ナビ（キュー）・全体はキュー再構築が必要。行/候補は再読込不要。
       if (target === "all" || target === "nav") {
