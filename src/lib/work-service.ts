@@ -26,6 +26,7 @@ import {
   executeWritePlan,
   fetchQueueIndex,
   fetchRowStatus,
+  fetchRowStatuses,
   fetchRowValues,
   fetchWikiHistoryFromSheet,
   loadAssignDiscordNames,
@@ -34,6 +35,9 @@ import {
 import {
   cacheStats as storeCacheStats,
   clearAllCaches,
+  clearNavCache,
+  clearRowsCache,
+  clearWikiCache,
   getLastAccessAt,
   getRowValues,
   getStructure,
@@ -41,12 +45,13 @@ import {
   hasQueueIndex,
   hasWikiHistory,
   loadQueueIndex,
+  patchQueueIndex,
   patchRowValues,
   saveQueueIndex,
+  saveRowValues,
   saveWikiHistory,
   setStructure,
   touchLastAccessAt,
-  withBundle,
 } from "./store";
 import type {
   BootstrapPayload,
@@ -277,19 +282,42 @@ export async function getRowProbe(
   const sheet = getSheetById(sheetId) ?? DEFAULT_SHEET;
   const structure = await ensureStructure(sheet);
   const rules = rulesFor(sheet, structure);
+  // 探索は読み取り専用: 作業 Status の 1 セルのみ取得し、巨大な nav キャッシュは書き換えない。
   const status = await fetchRowStatus(sheet, rules, sheetRowNumber);
-
-  withBundle(sheet.id, (bundle) => {
-    bundle.lastAccessAt = Date.now();
-    if (status) {
-      const row = bundle.queueIndex.find(
-        (r) => r.sheetRowNumber === sheetRowNumber
-      );
-      if (row) row.status = status;
-    }
-  });
-
+  touchLastAccessAt(sheet.id);
   return { sheet: sheet.id, sheetRowNumber, status };
+}
+
+/**
+ * 複数行の作業 Status をまとめて返す（移動探索の先読み）。
+ * B: 行データがキャッシュ済みの行は API を使わずキャッシュから status を求め、
+ *    未キャッシュの行だけを 1 リクエスト（batchGet）で取得する。
+ */
+export async function getRowStatuses(
+  sheetId: string,
+  rowNumbers: number[]
+): Promise<{ sheet: string; statuses: Record<number, string> }> {
+  const sheet = getSheetById(sheetId) ?? DEFAULT_SHEET;
+  const structure = await ensureStructure(sheet);
+  const rules = rulesFor(sheet, structure);
+  const statusUnique = rules.statusUnique;
+
+  const statuses: Record<number, string> = {};
+  const uncached: number[] = [];
+  for (const row of rowNumbers) {
+    const cached = statusUnique ? getRowValues(sheet.id, row) : null;
+    if (cached) {
+      const map = rowByUniqueFromValues(rules.uniqueHeaders, cached);
+      statuses[row] = String(map[statusUnique!] ?? "").trim();
+    } else {
+      uncached.push(row);
+    }
+  }
+  if (uncached.length) {
+    Object.assign(statuses, await fetchRowStatuses(sheet, rules, uncached));
+  }
+  touchLastAccessAt(sheet.id);
+  return { sheet: sheet.id, statuses };
 }
 
 export async function getRow(
@@ -304,31 +332,19 @@ export async function getRow(
   let rowValues = getRowValues(sheet.id, sheetRowNumber);
   if (!rowValues) {
     rowValues = await fetchRowValues(sheet, structure, sheetRowNumber);
+    // 作業用キャッシュ（rows）にその行だけ書く。nav/wiki は触らない。
+    saveRowValues(sheet.id, sheetRowNumber, rowValues);
   }
+  touchLastAccessAt(sheet.id);
 
   const rowByUnique = rowByUniqueFromValues(rules.uniqueHeaders, rowValues);
-  const payload = buildRowPayload(
+  return buildRowPayload(
     rules,
     { id: sheet.id, label: sheet.label },
     rowByUnique,
     sheetRowNumber,
     options
   );
-
-  const statusValue = payload.columns.find((c) => c.isStatus)?.value ?? "";
-
-  withBundle(sheet.id, (bundle) => {
-    bundle.lastAccessAt = Date.now();
-    bundle.rows[String(sheetRowNumber)] = rowValues;
-    if (statusValue) {
-      const row = bundle.queueIndex.find(
-        (r) => r.sheetRowNumber === sheetRowNumber
-      );
-      if (row) row.status = statusValue;
-    }
-  });
-
-  return payload;
 }
 
 export async function saveRow(payload: SavePayload): Promise<SaveResult> {
@@ -381,12 +397,7 @@ export async function saveRow(payload: SavePayload): Promise<SaveResult> {
 
   const statusUnique = rowPayload.columns.find((c) => c.isStatus)?.uniqueName;
   if (statusUnique && updates[statusUnique] !== undefined) {
-    withBundle(sheet.id, (bundle) => {
-      const row = bundle.queueIndex.find(
-        (r) => r.sheetRowNumber === payload.sheetRowNumber
-      );
-      if (row) row.status = updates[statusUnique];
-    });
+    patchQueueIndex(sheet.id, payload.sheetRowNumber, updates[statusUnique], "");
   }
 
   const queue = recomputeQueueAfterSave(payload.options, payload.queue);
@@ -400,6 +411,45 @@ export async function refreshCache(): Promise<void> {
   for (const sheet of WORK_SHEETS) {
     const structure = await loadSheetStructure(sheet);
     setStructure(sheet.id, structure);
+  }
+}
+
+/** ナビ（キュー）用キャッシュのみ再構築（構造 + キュー index。次回キュー構築で作り直す）。 */
+export async function rebuildNavCache(): Promise<void> {
+  rulesCache.clear();
+  for (const sheet of WORK_SHEETS) {
+    clearNavCache(sheet.id);
+    const structure = await loadSheetStructure(sheet);
+    setStructure(sheet.id, structure);
+  }
+}
+
+/** 作業用キャッシュ（行データ）のみ破棄。行を開くと個別に再取得する。 */
+export function clearRowsCacheAll(): void {
+  for (const sheet of WORK_SHEETS) clearRowsCache(sheet.id);
+}
+
+/** 候補用キャッシュ（正しいwiki 候補学習）のみ破棄。次回候補表示で作り直す。 */
+export function clearWikiCacheAll(): void {
+  for (const sheet of WORK_SHEETS) clearWikiCache(sheet.id);
+}
+
+export type CacheTarget = "all" | "nav" | "rows" | "wiki";
+
+/** 用途別にキャッシュをクリア/再構築する。 */
+export async function clearCacheByTarget(target: CacheTarget): Promise<void> {
+  switch (target) {
+    case "nav":
+      await rebuildNavCache();
+      return;
+    case "rows":
+      clearRowsCacheAll();
+      return;
+    case "wiki":
+      clearWikiCacheAll();
+      return;
+    default:
+      await refreshCache();
   }
 }
 

@@ -84,9 +84,9 @@ GET /api/wiki-history?name=...&wiki=...&q=...&indexRows=10000
 
 ## キャッシュ
 
-- 保存先: `.cache/{SPREADSHEET_ID}.json` の `wikiHistory` フィールド
+- 保存先: `.cache/{SPREADSHEET_ID}__{sheetId}__wiki.json`（用途別分割。`store.ts` 参照）
 - `indexRows` が UI の設定と一致しない場合は再構築
-- `DELETE /api/cache`（キャッシュクリア）で履歴も削除
+- `DELETE /api/cache?target=wiki`（候補再構築）で履歴のみ削除。`target=all` で全キャッシュと共に削除
 
 ## 関連ファイル
 

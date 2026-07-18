@@ -1,11 +1,21 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { apiErrorResponse } from "@/lib/api-error";
-import { cacheStats, refreshCache } from "@/lib/work-service";
+import {
+  cacheStats,
+  clearCacheByTarget,
+  type CacheTarget,
+} from "@/lib/work-service";
 
-export async function DELETE() {
+const VALID_TARGETS: CacheTarget[] = ["all", "nav", "rows", "wiki"];
+
+export async function DELETE(request: NextRequest) {
   try {
-    await refreshCache();
-    return NextResponse.json({ ok: true, stats: cacheStats() });
+    const raw = request.nextUrl.searchParams.get("target") ?? "all";
+    const target = (VALID_TARGETS.includes(raw as CacheTarget)
+      ? raw
+      : "all") as CacheTarget;
+    await clearCacheByTarget(target);
+    return NextResponse.json({ ok: true, target, stats: cacheStats() });
   } catch (e) {
     return apiErrorResponse(e);
   }

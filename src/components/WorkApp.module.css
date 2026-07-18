@@ -71,7 +71,7 @@
 
 .layout {
   display: grid;
-  grid-template-columns: 272px minmax(0, 1fr);
+  grid-template-columns: 236px minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
@@ -356,6 +356,11 @@
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 8px;
+}
+
+/* サイドの操作ボタンはラベルを折り返さない（幅を狭めても改行しない） */
+.btnRow .secondary {
+  white-space: nowrap;
 }
 
 .secondary {

@@ -9,7 +9,6 @@ import type {
   BootstrapPayload,
   QueueEntry,
   RowPayload,
-  RowProbePayload,
   WorkOptions,
 } from "@/lib/types";
 import { applyTheme, loadThemeMode, type ThemeMode } from "@/lib/theme";
@@ -21,6 +20,9 @@ const LAST_ROW_KEY = "wikiWorkLastRow";
 // 1回の移動でこの数以上スキップしたら、行を1件ずつ確認し続けず
 // キュー index を一度だけ再構築して最新キューで一気にジャンプする（負荷軽減）。
 const NAV_REFRESH_SKIP_THRESHOLD = 5;
+
+// 起動直後のリクエスト集中を避けるための候補ウォーム遅延（ミリ秒）。
+const WIKI_WARM_DELAY_MS = 6000;
 
 const entryKey = (e: QueueEntry) => `${e.sheet}#${e.row}`;
 const indexOfEntry = (q: QueueEntry[], e: QueueEntry | null): number =>
@@ -131,8 +133,9 @@ const HELP_ACTIONS: ReadonlyArray<readonly [string, string]> = [
   ["次の行", "変更を保存して次の行へ"],
   ["開く", "変更を保存して指定したシート・行を開く"],
   ["リセット", "今の行の変更を読み込み時の状態に戻す"],
-  ["キュー再読込", "担当者・Status など、表示対象行の最新状態をシートから読み直す"],
-  ["キャッシュクリア", "アプリが一時保存している情報を削除し再生成、正しいwiki の候補を更新"],
+  ["対象行リストを更新", "担当者・Status など、表示対象行の最新状態をシートから読み直す"],
+  ["候補再構築", "正しいwiki の入力候補を作り直す（シートから再学習）"],
+  ["表示中の行を再取得", "一時保存した行の内容を破棄（次に開くと再取得）。動作が重い/古いとき用"],
   ["表示設定等", "スマホでの利用時に表示設定等を開く"],
 ];
 
@@ -251,6 +254,8 @@ export function WorkApp() {
   } | null>(null);
   const queueWriteSeqRef = useRef(0);
   const pendingRestoreRowRef = useRef<QueueEntry | null>(null);
+  // 移動探索の status 先読みメモ（キー: シートID#行番号）。対象行リストを更新/保存で破棄。
+  const statusMemoRef = useRef<Map<string, string>>(new Map());
 
   const currentEntry = useMemo<QueueEntry | null>(() => {
     if (historyIndex >= 0 && history[historyIndex]) return history[historyIndex];
@@ -379,15 +384,48 @@ export function WorkApp() {
     setOriginalEdits(next);
   };
 
-  // 探索時は Status 列のみ取得（行全体は着地時だけ）。
-  const fetchRowProbe = useCallback(
-    async (entry: QueueEntry): Promise<RowProbePayload> => {
-      const res = await fetch(
-        `/api/row/${entry.row}?sheet=${encodeURIComponent(entry.sheet)}&probe=true`
-      );
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "行の確認に失敗");
-      return data as RowProbePayload;
+  // A+B: 未取得の候補 status を先読みで一括取得し、statusMemo へ格納する。
+  // シートごとに 1 リクエスト（batchGet）。キャッシュ済み行はサーバー側で API を使わない。
+  const NAV_LOOKAHEAD = 20;
+  const primeStatusesAhead = useCallback(
+    async (
+      q: QueueEntry[],
+      startIdx: number,
+      dir: "next" | "prev",
+      removed: Set<string>
+    ): Promise<void> => {
+      const memo = statusMemoRef.current;
+      const targets: QueueEntry[] = [];
+      let i = startIdx;
+      while (targets.length < NAV_LOOKAHEAD && i >= 0 && i < q.length) {
+        const e = q[i];
+        const key = entryKey(e);
+        if (!removed.has(key) && !memo.has(key)) targets.push(e);
+        i = dir === "next" ? i + 1 : i - 1;
+      }
+      if (!targets.length) return;
+
+      const bySheet = new Map<string, number[]>();
+      for (const e of targets) {
+        const list = bySheet.get(e.sheet) ?? [];
+        list.push(e.row);
+        bySheet.set(e.sheet, list);
+      }
+      for (const [sheet, rows] of bySheet) {
+        const res = await fetch("/api/probe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sheet, rows }),
+        });
+        if (!res.ok) continue;
+        const data = (await res.json()) as {
+          sheet: string;
+          statuses: Record<string, string>;
+        };
+        for (const [row, status] of Object.entries(data.statuses ?? {})) {
+          memo.set(`${sheet}#${row}`, status);
+        }
+      }
     },
     []
   );
@@ -425,6 +463,7 @@ export function WorkApp() {
       if (seq !== queueWriteSeqRef.current) return;
       const rows = (data.queue ?? []) as QueueEntry[];
       setQueueRows(rows);
+      statusMemoRef.current.clear();
 
       if (!rows.length) {
         setRowPayload(null);
@@ -520,9 +559,13 @@ export function WorkApp() {
     if (!bootstrap || bootstrap.authRequired) return;
     if (wikiWarmedRowsRef.current === options.indexRows) return;
     wikiWarmedRowsRef.current = options.indexRows;
-    void fetch(
-      `/api/wiki-history?name=&indexRows=${options.indexRows}`
-    ).catch(() => {});
+    // E: 候補ウォームは起動直後のリクエスト集中を避けるため遅延実行（背景）。
+    // 構造・キュー・初回行の取得が落ち着いてから 1 回だけ投げる。
+    const indexRows = options.indexRows;
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/wiki-history?name=&indexRows=${indexRows}`).catch(() => {});
+    }, WIKI_WARM_DELAY_MS);
+    return () => window.clearTimeout(timer);
   }, [bootstrap, options.indexRows]);
 
   useEffect(() => {
@@ -616,6 +659,7 @@ export function WorkApp() {
 
       const nextQueueRows = (data.queue ?? queueRows) as QueueEntry[];
       if (seq === queueWriteSeqRef.current) setQueueRows(nextQueueRows);
+      statusMemoRef.current.clear();
       setOriginalEdits(edits);
       setMessage(`${data.savedCells} セルを保存しました。`, "ok");
       return { ok: true, queueRows: nextQueueRows };
@@ -651,6 +695,7 @@ export function WorkApp() {
       if (!res.ok) return null;
       const rows = (data.queue ?? []) as QueueEntry[];
       setQueueRows(rows);
+      statusMemoRef.current.clear();
       return rows;
     } catch {
       return null;
@@ -671,6 +716,7 @@ export function WorkApp() {
       let skipped = 0;
       let refreshed = false;
       const refreshTargets = new Set<string>();
+      const filtered = options.statusFilter !== "all";
       setMessage(dir === "next" ? "次の対象行を探索中…" : "前の対象行を探索中…");
       while (true) {
         ci = dir === "next" ? ci + 1 : ci - 1;
@@ -687,9 +733,14 @@ export function WorkApp() {
         }
         const cand = q[ci];
 
-        if (options.statusFilter !== "all") {
-          const probe = await fetchRowProbe(cand);
-          if (shouldSkipLiveStatus(probe.status)) {
+        if (filtered) {
+          // A+B+C: status はメモ優先。未取得なら先読みで一括取得（batchGet）。
+          let status = statusMemoRef.current.get(entryKey(cand));
+          if (status === undefined) {
+            await primeStatusesAhead(q, ci, dir, removed);
+            status = statusMemoRef.current.get(entryKey(cand)) ?? "";
+          }
+          if (shouldSkipLiveStatus(status)) {
             removed.add(entryKey(cand));
             refreshTargets.add(cand.sheet);
             skipped += 1;
@@ -708,7 +759,12 @@ export function WorkApp() {
           }
         }
 
+        // C: 着地は行全体を1回取得するだけ（probe との二重取得をしない）。
         const payload = await fetchRowPayload(cand, options);
+        statusMemoRef.current.set(
+          entryKey(cand),
+          payload.columns.find((c) => c.isStatus)?.value ?? ""
+        );
         // 着地: ここで初めて描画する。
         const finalQ = q.filter((e) => !removed.has(entryKey(e)));
         setRowPayload(payload);
@@ -796,10 +852,31 @@ export function WorkApp() {
     setMessage("変更を破棄しました。");
   };
 
-  const clearCache = async () => {
-    await fetch("/api/cache", { method: "DELETE" });
-    setMessage("キャッシュをクリアしました。", "ok");
-    await loadQueue(options, true);
+  const clearCache = async (
+    target: "all" | "nav" | "rows" | "wiki" = "all"
+  ) => {
+    const labels: Record<typeof target, string> = {
+      all: "全キャッシュ",
+      nav: "キュー",
+      rows: "行データ",
+      wiki: "正しいwiki 候補",
+    };
+    if (loading) return;
+    setLoading(true);
+    try {
+      setMessage(`${labels[target]}を更新中…`);
+      const res = await fetch(`/api/cache?target=${target}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("キャッシュの更新に失敗");
+      setMessage(`${labels[target]}を更新しました。`, "ok");
+      // ナビ（キュー）・全体はキュー再構築が必要。行/候補は再読込不要。
+      if (target === "all" || target === "nav") {
+        await loadQueue(options, true, true);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (bootstrap?.authRequired) {
@@ -977,16 +1054,27 @@ export function WorkApp() {
                   )
                 }
               >
-                キュー再読込
+                対象行リストを更新
               </button>
               <button
                 type="button"
                 className={styles.secondary}
                 onClick={() =>
-                  clearCache().catch((e) => setMessage(String(e), "error"))
+                  clearCache("rows").catch((e) => setMessage(String(e), "error"))
                 }
               >
-                キャッシュクリア
+                表示中の行を再取得
+              </button>
+            </div>
+            <div className={styles.btnRow}>
+              <button
+                type="button"
+                className={styles.secondary}
+                onClick={() =>
+                  clearCache("wiki").catch((e) => setMessage(String(e), "error"))
+                }
+              >
+                候補再構築
               </button>
             </div>
           </div>

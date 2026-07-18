@@ -314,6 +314,39 @@ export async function fetchRowStatus(
   return String(resp.data.values?.[0]?.[0] ?? "").trim();
 }
 
+/**
+ * 複数行の作業 Status を **1 リクエスト**（batchGet 複数レンジ）で取得（移動探索の先読み用）。
+ * レンジ数が多い場合はチャンク分割して複数回に分ける。
+ */
+export async function fetchRowStatuses(
+  sheet: SheetConfig,
+  rules: SheetRules,
+  rowNumbers: number[]
+): Promise<Record<number, string>> {
+  const result: Record<number, string> = {};
+  if (!rules.statusUnique || !rowNumbers.length) return result;
+  const idx = rules.uniqueHeaders.indexOf(rules.statusUnique);
+  if (idx < 0) return result;
+  const letter = columnLetter(idx + 1);
+  const sheets = await getSheets();
+
+  const RANGE_CHUNK = 200;
+  for (let i = 0; i < rowNumbers.length; i += RANGE_CHUNK) {
+    const chunk = rowNumbers.slice(i, i + RANGE_CHUNK);
+    const ranges = chunk.map(
+      (r) => `'${sheet.name}'!${letter}${r}:${letter}${r}`
+    );
+    const batch = await sheets.spreadsheets.values.batchGet({
+      spreadsheetId: SPREADSHEET_ID,
+      ranges,
+    });
+    (batch.data.valueRanges ?? []).forEach((vr, j) => {
+      result[chunk[j]] = String(vr.values?.[0]?.[0] ?? "").trim();
+    });
+  }
+  return result;
+}
+
 export async function fetchRowValues(
   sheet: SheetConfig,
   structure: SheetStructure,

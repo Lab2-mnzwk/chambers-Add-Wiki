@@ -1,0 +1,31 @@
+.wrap {
+  margin: 12px 0;
+}
+
+.button {
+  background: var(--btn-secondary-bg);
+  color: var(--btn-secondary-text);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.status {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.statusOk {
+  color: var(--status-ok);
+}
+
+.statusError {
+  color: var(--status-error);
+}

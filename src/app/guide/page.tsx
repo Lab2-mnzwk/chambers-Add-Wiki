@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { CacheRebuildButton } from "@/components/CacheRebuildButton";
 import styles from "./guide.module.css";
 
 export const metadata: Metadata = {
@@ -43,6 +44,7 @@ export default function GuidePage() {
           <li><a href="#memory">9. 設定と開いていた行の記憶</a></li>
           <li><a href="#login">10. ログインと権限</a></li>
           <li><a href="#trouble">11. よくある症状と対処</a></li>
+          <li><a href="#maintenance">12. 全キャッシュ再構築（メンテナンス）</a></li>
         </ul>
       </nav>
 
@@ -126,17 +128,24 @@ export default function GuidePage() {
               <td>今の行の入力を、読み込み時の状態に戻します（保存前の取り消し）。</td>
             </tr>
             <tr>
-              <th scope="row">キュー再読込</th>
+              <th scope="row">対象行リストを更新</th>
               <td>
                 担当・Status など、表示対象行の最新状態をスプレッドシートから
                 読み直します。フィルタが効いていないと感じたら実行します。
               </td>
             </tr>
             <tr>
-              <th scope="row">キャッシュクリア</th>
+              <th scope="row">表示中の行を再取得</th>
               <td>
-                アプリが一時保存している情報を消して作り直します。正しいwiki の候補が
-                更新されない・古いときに実行します。
+                一時保存している行の内容を消します。次に開くと最新の内容を取得し直す
+                ため、表示が古い・動作が重いと感じたときに使います。
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">候補再構築</th>
+              <td>
+                正しいwiki の入力候補をシートから作り直します。更新タイミングの
+                詳細は「6. 正しいWiki の候補機能」を参照してください。
               </td>
             </tr>
             <tr>
@@ -285,8 +294,11 @@ export default function GuidePage() {
             （片方のシートで確定した正解が、もう片方でも候補に出ます）。
           </li>
           <li>
-            保存すると、その内容は次回以降の候補として学習されます。候補が古いと感じたら
-            <strong>キャッシュクリア</strong>で作り直せます。
+            <strong>自分が保存した内容はすぐに候補へ反映</strong>されます。ただし
+            他の方が保存した分は、アプリの動作環境の都合で反映に時間差が出ることが
+            あります（決まった周期での自動更新はありません）。候補が古い・見当たら
+            ないと感じたら、<strong>候補再構築</strong>ボタンで最新の内容に
+            更新してください。
           </li>
         </ul>
       </section>
@@ -301,7 +313,7 @@ export default function GuidePage() {
           </li>
           <li>
             <strong>文脈検索↗</strong>: 名称の下に表示され、出来事名と名称を組み合わせた
-            文（例:「出来事『◯◯』における『△△』に該当するWiki記事は？」）で検索します。
+            文（例: 出来事「◯◯」における「△△」に該当するWiki記事は？）で検索します。
           </li>
         </ul>
       </section>
@@ -392,12 +404,16 @@ export default function GuidePage() {
               <th scope="row">絞り込みが効いていない気がする</th>
               <td>
                 外部でシートを直接編集した後などにキャッシュが古くなることがあります。
-                「キュー再読込」を実行してください。
+                「対象行リストを更新」を実行してください。
               </td>
             </tr>
             <tr>
               <th scope="row">正しいwiki の候補が出ない／古い</th>
-              <td>「キャッシュクリア」で候補を作り直してください。</td>
+              <td>「候補再構築」で候補を作り直してください。</td>
+            </tr>
+            <tr>
+              <th scope="row">表示中の行の内容が古い・動作が重い</th>
+              <td>「表示中の行を再取得」を実行し、行を開き直してください。</td>
             </tr>
             <tr>
               <th scope="row">フィルタを変えたのに今の行が変わらない</th>
@@ -421,6 +437,23 @@ export default function GuidePage() {
             </tr>
           </tbody>
         </table>
+      </section>
+
+      <section id="maintenance" className={styles.section}>
+        <h2 className={styles.sectionTitle}>
+          12. 全キャッシュ再構築（メンテナンス）
+        </h2>
+        <p>
+          「対象行リストを更新」「表示中の行を再取得」「候補再構築」を行っても状況が
+          改善しない場合の最終手段です。アプリが一時保存している情報（対象行・
+          行データ・入力候補のすべて）を消して作り直します。通常の作業では
+          使いません。
+        </p>
+        <div className={styles.note}>
+          実行すると作り直しが完了するまで少し時間がかかります。実行後は
+          作業画面を再読み込みしてください。
+        </div>
+        <CacheRebuildButton />
       </section>
 
       <Link href="/" className={styles.backLink}>
