@@ -98,12 +98,15 @@ export async function POST(request: NextRequest) {
       const runSave = () => saveRow(body.save, (work) => after(work));
       const runMove = async () => {
         if (action.kind === "jump") {
-          // 移動先の絞り込み判定用に、行キャッシュを使わず最新を読む。
+          // 通常の保存＋移動は行キャッシュを優先する。背景裏読みが別の
+          // Vercelインスタンスで共有キャッシュへ置いた値も再利用し、
+          // 同じ行をSheetsから二重取得しない。同じ行を「開く」場合だけは
+          // 下の sameRowJump 分岐で保存後に forceFresh 取得する。
           return getRow(
             action.target.sheet,
             action.target.row,
             action.rowOptions,
-            true
+            false
           );
         }
         return navigateToTarget(

@@ -44,6 +44,11 @@ type NextPrefetch = {
   promise?: Promise<RowPayload | null>;
 };
 
+type TakenNextPrefetch = {
+  payload?: RowPayload;
+  promise?: Promise<RowPayload | null>;
+};
+
 const entryKey = (e: QueueEntry) => `${e.sheet}#${e.row}`;
 const indexOfEntry = (q: QueueEntry[], e: QueueEntry | null): number =>
   e ? q.findIndex((x) => x.sheet === e.sheet && x.row === e.row) : -1;
@@ -699,7 +704,11 @@ export function WorkApp() {
           nextPrefetchRef.current = { ...entry, payload };
           return payload;
         })
-        .catch(() => {
+        .catch((error) => {
+          console.warn(
+            `[prefetch] failed for ${entryKey(target)}; foreground navigation will retry`,
+            error
+          );
           if (nextPrefetchRef.current?.seq === seq) {
             nextPrefetchRef.current = null;
           }
@@ -709,22 +718,26 @@ export function WorkApp() {
     [clearNextPrefetch, fetchRowPayload]
   );
 
-  /** 裏読みが現在位置・次行・絞り込み条件と一致するときだけ消費する。 */
+  /**
+   * 裏読みが現在位置・次行・絞り込み条件と一致するときだけ消費する。
+   * Promise はここで await せず返し、保存開始前に裏読み待ちが直列化しないようにする。
+   */
   const takeNextPrefetch = useCallback(
-    async (
+    (
       fromEntry: QueueEntry,
       target: QueueEntry,
       opts: WorkOptions
-    ): Promise<RowPayload | null> => {
+    ): TakenNextPrefetch | null => {
       const pending = nextPrefetchRef.current;
       if (!pending) return null;
       if (pending.fromKey !== entryKey(fromEntry)) return null;
       if (pending.filterKey !== navFilterKey(opts)) return null;
       if (pending.targetKey !== entryKey(target)) return null;
       nextPrefetchRef.current = null;
-      if (pending.payload) return pending.payload;
-      if (pending.promise) return pending.promise;
-      return null;
+      return {
+        payload: pending.payload,
+        promise: pending.payload ? undefined : pending.promise,
+      };
     },
     []
   );
@@ -1141,21 +1154,38 @@ export function WorkApp() {
         const firstTarget = firstWindow[0]?.entry;
         const updates = changedEdits(edits, originalEdits);
         const seq = ++queueWriteSeqRef.current;
-        const prefetched =
+        const takenPrefetch =
           dir === "next" && firstTarget
-            ? await takeNextPrefetch(entryBeforeSave, firstTarget, options)
+            ? takeNextPrefetch(entryBeforeSave, firstTarget, options)
             : null;
         // 裏読み（次方向）または訪問済みキャッシュ（前方向含む）があれば即着地できる。
         const instantPayload =
-          prefetched ??
+          takenPrefetch?.payload ??
           (firstTarget ? takeVisitedPayload(firstTarget, options) : null);
 
-        if (
-          instantPayload &&
-          firstTarget &&
-          payloadMatchesNav(instantPayload, options)
-        ) {
-          // 楽観着地: 手元の次/前行を先に表示し、保存は背景で完了させる。
+        type SaveAttempt =
+          | { ok: true; result: SaveResult }
+          | { ok: false; error: unknown };
+        const savePayload = buildCurrentSavePayload(entryBeforeSave, updates);
+        const startSaveAttempt = (): Promise<SaveAttempt> =>
+          fetch("/api/save", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(savePayload),
+          })
+            .then((res) => readApiResponse<SaveResult>(res, "保存に失敗"))
+            .then((result) => ({ ok: true, result }) as const)
+            .catch((error) => ({ ok: false, error }) as const);
+
+        /**
+         * 手元に移動先が揃ったら先に着地し、既に開始済み（または今開始する）保存を
+         * 背景で完了させる。裏読み待ちと保存を直列化しない。
+         */
+        const landWithBackgroundSave = (
+          target: QueueEntry,
+          targetPayload: RowPayload,
+          startedSave?: Promise<SaveAttempt>
+        ) => {
           const rollback = {
             payload: rowPayload,
             edits,
@@ -1165,21 +1195,12 @@ export function WorkApp() {
             queueIndex,
             queue: queueBeforeSave,
           };
-          landOn(firstTarget, instantPayload, q, removed);
+          landOn(target, targetPayload, q, removed);
           setMessage("保存中…");
           const savePromise = (async (): Promise<boolean> => {
-            try {
-              const res = await fetch("/api/save", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(
-                  buildCurrentSavePayload(entryBeforeSave, updates)
-                ),
-              });
-              const saveResult = await readApiResponse<SaveResult>(
-                res,
-                "保存に失敗"
-              );
+            const attempt = await (startedSave ?? startSaveAttempt());
+            if (attempt.ok) {
+              const saveResult = attempt.result;
               // 保存行が絞り込みから外れたら、背景でキューから除く。
               if (
                 saveResult.status !== undefined &&
@@ -1196,42 +1217,111 @@ export function WorkApp() {
               patchVisitedPayload(entryBeforeSave, updates);
               flashMessage(`${saveResult.savedCells} セルを保存しました。`);
               return true;
-            } catch (e) {
-              const stillOnLanded =
-                currentEntryRef.current &&
-                entryKey(currentEntryRef.current) === entryKey(firstTarget);
-              if (stillOnLanded) {
-                // ロールバック: 元の行と未保存編集へ戻す（移動先で行った編集は破棄）。
-                rollbackSeqRef.current += 1;
-                clearNextPrefetch();
-                setQueueRows(rollback.queue);
-                setHistory(rollback.history);
-                setHistoryIndex(rollback.historyIndex);
-                setQueueIndex(rollback.queueIndex);
-                setRowPayload(rollback.payload);
-                setEdits(rollback.edits);
-                setOriginalEdits(rollback.originalEdits);
-                setMessage(
-                  `保存に失敗したため元の行に戻しました: ${String(e)}`,
-                  "error"
-                );
-              } else {
-                // 既に別の行へ移動済み: 画面は動かさず通知のみ。編集は保存されていない。
-                setMessage(
-                  `行 ${entryBeforeSave.row} の保存に失敗しました。該当行を開き直して再入力してください: ${String(e)}`,
-                  "error"
-                );
-              }
-              return false;
-            } finally {
-              pendingSaveRef.current = null;
             }
-          })();
+
+            const stillOnLanded =
+              currentEntryRef.current &&
+              entryKey(currentEntryRef.current) === entryKey(target);
+            if (stillOnLanded) {
+              // ロールバック: 元の行と未保存編集へ戻す（移動先で行った編集は破棄）。
+              rollbackSeqRef.current += 1;
+              clearNextPrefetch();
+              setQueueRows(rollback.queue);
+              setHistory(rollback.history);
+              setHistoryIndex(rollback.historyIndex);
+              setQueueIndex(rollback.queueIndex);
+              setRowPayload(rollback.payload);
+              setEdits(rollback.edits);
+              setOriginalEdits(rollback.originalEdits);
+              setMessage(
+                `保存に失敗したため元の行に戻しました: ${String(attempt.error)}`,
+                "error"
+              );
+            } else {
+              // 既に別の行へ移動済み: 画面は動かさず通知のみ。編集は保存されていない。
+              setMessage(
+                `行 ${entryBeforeSave.row} の保存に失敗しました。該当行を開き直して再入力してください: ${String(attempt.error)}`,
+                "error"
+              );
+            }
+            return false;
+          })().finally(() => {
+            pendingSaveRef.current = null;
+          });
           pendingSaveRef.current = savePromise;
+        };
+
+        if (
+          instantPayload &&
+          firstTarget &&
+          payloadMatchesNav(instantPayload, options)
+        ) {
+          // 楽観着地: 手元の次/前行を先に表示し、保存は背景で完了させる。
+          landWithBackgroundSave(firstTarget, instantPayload);
           return;
         }
 
-        if (instantPayload && firstTarget) {
+        if (!instantPayload && firstTarget && takenPrefetch?.promise) {
+          // 裏読みが進行中なら、待つ前に表示と保存を開始する。
+          setMessage(
+            dir === "next"
+              ? "保存しながら次の対象行を読み込み中…"
+              : "保存しながら前の対象行を読み込み中…"
+          );
+          const startedSave = startSaveAttempt();
+          let pendingPayload: RowPayload | null = null;
+          let moveError: unknown = null;
+          try {
+            pendingPayload = await takenPrefetch.promise;
+            // 背景読みが429等で諦めた場合だけ、通常のキャッシュ優先読みへ移る。
+            // 同じ進行中Promiseと重複して行を読まない。
+            if (!pendingPayload) {
+              console.warn(
+                `[navigation] next prefetch unavailable for ${entryKey(firstTarget)}; ` +
+                  "falling back to foreground cache-first read"
+              );
+              pendingPayload = await fetchLandingPayload(firstTarget, options);
+            }
+          } catch (error) {
+            moveError = error;
+          }
+
+          if (
+            pendingPayload &&
+            payloadMatchesNav(pendingPayload, options)
+          ) {
+            // 保存は既に並行している。行が揃った時点で先に着地する。
+            landWithBackgroundSave(firstTarget, pendingPayload, startedSave);
+            return;
+          }
+
+          // 着地できない場合も、既に開始した保存の結果は必ず取り込む。
+          const saveAttempt = await startedSave;
+          if (!saveAttempt.ok) {
+            setMessage(String(saveAttempt.error), "error");
+            return;
+          }
+          q = applySaveSuccess(
+            saveAttempt.result,
+            updates,
+            entryBeforeSave,
+            queueBeforeSave,
+            seq
+          );
+          markRemovedAnchor(q);
+          if (moveError) {
+            setMessage(
+              `${saveAttempt.result.savedCells} セルは保存しましたが、移動に失敗しました: ${String(moveError)}`,
+              "error"
+            );
+            return;
+          }
+          removed.add(entryKey(firstTarget));
+          refreshTargets.add(firstTarget.sheet);
+          skipped += 1;
+          ci = indexOfEntry(q, firstTarget);
+          if (ci < 0) ci = dir === "next" ? q.length - 1 : 0;
+        } else if (instantPayload && firstTarget) {
           // 手元データはあるが移動先が絞り込み外: 保存を待ってからスキップ探索を続ける。
           setMessage("保存中…");
           try {
@@ -1371,10 +1461,13 @@ export function WorkApp() {
 
         const target = win[0].entry;
         const fromForPrefetch = entryBeforeSave ?? currentEntry;
-        const prefetched =
+        const takenPrefetch =
           dir === "next" && fromForPrefetch && skipped === 0 && removed.size === 0
-            ? await takeNextPrefetch(fromForPrefetch, target, options)
+            ? takeNextPrefetch(fromForPrefetch, target, options)
             : null;
+        const prefetched =
+          takenPrefetch?.payload ??
+          (takenPrefetch?.promise ? await takenPrefetch.promise : null);
 
         // 裏読み → 訪問済みキャッシュ → probe の順で軽い判定から使う。
         const localPayload =
