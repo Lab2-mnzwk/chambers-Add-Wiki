@@ -49,22 +49,12 @@ export function buildSheetRules(
   const { rawHeaders, uniqueHeaders } = structure;
   const headerMap = resolveHeaderToUnique(rawHeaders, uniqueHeaders);
 
-  // --- セクション（Agent/Patient-Theme/Place/Territory）を左→右スキャンで対応付け ---
-  const sectionByHeader: Record<string, string> = {};
-  let currentSection: string | null = null;
-  for (let i = 0; i < rawHeaders.length; i++) {
-    const h = rawHeaders[i];
-    if (SECTION_SET.has(h)) currentSection = h;
-    if (currentSection && !(h in sectionByHeader)) {
-      sectionByHeader[h] = currentSection;
-    }
-  }
-
   // --- 三つ組検出: `正しいwiki` 列を起点に直前 3 列 [名称, deweyID, Wiki] を取る ---
   const triplets: WikiTriplet[] = [];
   const wikiNameHeaders = new Set<string>();
   const deweyByName: Record<string, string> = {};
   const tripletUnique = new Set<string>();
+  const tripletHeaderSet = new Set<string>();
 
   for (let i = 0; i < rawHeaders.length; i++) {
     if (!rawHeaders[i].includes("正しいwiki")) continue;
@@ -86,6 +76,25 @@ export function buildSheetRules(
     if (dewey) deweyByName[name] = dewey;
     for (const h of [name, wiki, ok, dewey]) {
       if (h && headerMap[h]) tripletUnique.add(headerMap[h]);
+      if (h) tripletHeaderSet.add(h);
+    }
+  }
+
+  // --- セクション（Agent/Patient-Theme/Place/Territory）を左→右スキャンで対応付け ---
+  // 対応付け対象は三つ組・memo 列だけに限定する。Status/Assignee/役割列等の構造列まで
+  // 対応付けてしまうと、最後尾のセクション（Territory）が Status 等を拾って
+  // 「常にアクティブ」判定になり、Territory_memo が常時表示される不具合になる。
+  const sectionByHeader: Record<string, string> = {};
+  let currentSection: string | null = null;
+  for (let i = 0; i < rawHeaders.length; i++) {
+    const h = rawHeaders[i];
+    if (SECTION_SET.has(h)) currentSection = h;
+    if (
+      currentSection &&
+      !(h in sectionByHeader) &&
+      (tripletHeaderSet.has(h) || isMemoHeaderName(h))
+    ) {
+      sectionByHeader[h] = currentSection;
     }
   }
 
