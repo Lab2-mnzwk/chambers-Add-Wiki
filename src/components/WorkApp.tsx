@@ -34,6 +34,11 @@ const NAV_REFRESH_SKIP_THRESHOLD = 5;
 // キャッシュ順の次/前 1 行だけを読む。ズレは稀なので着地後判定で回復する。
 const NAV_WINDOW = 1;
 
+// 裏読みが 429 等で落ちたときに、一度だけ間を置いて温め直すまでの待ち時間。
+// 着地直後は背景保存と裏読みが同時に走ってレート制限に当たりやすいため、
+// 混雑が収まる頃に1回だけ取り直す。
+const PREFETCH_RETRY_DELAY_MS = 3000;
+
 type NextPrefetch = {
   seq: number;
   fromKey: string;
@@ -439,6 +444,8 @@ export function WorkApp() {
   /** 現在の絞り込み条件だけで、次方向の候補窓を裏読みする。 */
   const nextPrefetchRef = useRef<NextPrefetch | null>(null);
   const nextPrefetchSeqRef = useRef(0);
+  /** 裏読み失敗後の再試行タイマー。着地・条件変更で破棄する。 */
+  const nextPrefetchRetryTimerRef = useRef<number | null>(null);
   /** 楽観着地後の背景保存。完了までは次の「編集あり」の保存・移動操作を直列化する。 */
   const pendingSaveRef = useRef<Promise<boolean> | null>(null);
   /** 背景保存失敗でロールバックした回数。進行中の移動処理が着地を破棄する判定に使う。 */
@@ -668,20 +675,46 @@ export function WorkApp() {
     [fetchRowPayload]
   );
 
+  const cancelPrefetchRetry = useCallback(() => {
+    if (nextPrefetchRetryTimerRef.current == null) return;
+    window.clearTimeout(nextPrefetchRetryTimerRef.current);
+    nextPrefetchRetryTimerRef.current = null;
+  }, []);
+
   const clearNextPrefetch = useCallback(() => {
     nextPrefetchSeqRef.current += 1;
     nextPrefetchRef.current = null;
-  }, []);
+    cancelPrefetchRetry();
+  }, [cancelPrefetchRetry]);
+
+  /**
+   * 再試行から自身を呼ぶための参照。useCallback の自己参照による
+   * 循環依存を避けるために ref 経由にする。
+   */
+  const warmNextPrefetchRef = useRef<
+    (
+      fromEntry: QueueEntry,
+      q: QueueEntry[],
+      opts: WorkOptions,
+      attempt?: number
+    ) => void
+  >(() => {});
 
   /** 現在選択中の条件だけで、キャッシュ順の次 1 行を裏で温める。 */
   const warmNextPrefetch = useCallback(
-    (fromEntry: QueueEntry, q: QueueEntry[], opts: WorkOptions) => {
+    (
+      fromEntry: QueueEntry,
+      q: QueueEntry[],
+      opts: WorkOptions,
+      attempt = 0
+    ) => {
       const ci = indexOfEntry(q, fromEntry);
       const target = ci >= 0 ? q[ci + 1] : undefined;
       if (!target) {
         clearNextPrefetch();
         return;
       }
+      cancelPrefetchRetry();
       const seq = ++nextPrefetchSeqRef.current;
       const entry: NextPrefetch = {
         seq,
@@ -712,11 +745,27 @@ export function WorkApp() {
           if (nextPrefetchRef.current?.seq === seq) {
             nextPrefetchRef.current = null;
           }
+          // 着地時の1回きりで諦めると、その行に留まる限り裏読みが復活せず
+          // 次の移動が必ず「保存しながら読み込み」になる。一時的なレート制限を
+          // 想定して、同じ行・同じ条件のままなら一度だけ温め直す。
+          if (attempt === 0 && nextPrefetchSeqRef.current === seq) {
+            nextPrefetchRetryTimerRef.current = window.setTimeout(() => {
+              nextPrefetchRetryTimerRef.current = null;
+              if (nextPrefetchSeqRef.current !== seq) return;
+              warmNextPrefetchRef.current(fromEntry, q, opts, attempt + 1);
+            }, PREFETCH_RETRY_DELAY_MS);
+          }
           return null;
         });
     },
-    [clearNextPrefetch, fetchRowPayload]
+    [cancelPrefetchRetry, clearNextPrefetch, fetchRowPayload]
   );
+
+  useEffect(() => {
+    warmNextPrefetchRef.current = warmNextPrefetch;
+  }, [warmNextPrefetch]);
+
+  useEffect(() => cancelPrefetchRetry, [cancelPrefetchRetry]);
 
   /**
    * 裏読みが現在位置・次行・絞り込み条件と一致するときだけ消費する。
@@ -741,6 +790,30 @@ export function WorkApp() {
     },
     []
   );
+
+  /**
+   * 今の現在行・条件で使える裏読みが無ければ温め直す。
+   * 着地時の裏読みが失敗したまま行に留まっているケースを、移動前に拾い直す。
+   * 有効な裏読み（完了済み・進行中どちらも）があるときは何もしない。
+   */
+  const ensureNextPrefetch = useCallback(() => {
+    // 移動処理中は着地時の warm に任せる（移動元が変わる直前に温めない）。
+    if (loading || !currentEntry) return;
+    const ci = indexOfEntry(queueRows, currentEntry);
+    const target = ci >= 0 ? queueRows[ci + 1] : undefined;
+    if (!target) return;
+    const pending = nextPrefetchRef.current;
+    if (
+      pending &&
+      pending.fromKey === entryKey(currentEntry) &&
+      pending.filterKey === navFilterKey(options) &&
+      pending.targetKey === entryKey(target)
+    ) {
+      return;
+    }
+    // 再試行待ちの最中でも、移動が近いこの時点では待たずに取りにいく。
+    warmNextPrefetch(currentEntry, queueRows, options);
+  }, [currentEntry, loading, options, queueRows, warmNextPrefetch]);
 
   /** 表示した行を訪問済みキャッシュ（LRU）へ記録する。 */
   const rememberVisitedPayload = useCallback(
@@ -933,6 +1006,13 @@ export function WorkApp() {
     })().catch((e) => setMessage(String(e), "error"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bootstrap, options.worker, options.statusFilter, options.indexRows]);
+
+  // 編集が入った行は「次の行」で移動する可能性が高い。着地時の裏読みが
+  // 落ちていた場合に備え、入力を始めた時点で取り直しておく。
+  useEffect(() => {
+    if (!dirty) return;
+    ensureNextPrefetch();
+  }, [dirty, ensureNextPrefetch]);
 
   const updateOption = <K extends keyof WorkOptions>(
     key: K,
@@ -1964,6 +2044,8 @@ export function WorkApp() {
                   className={styles.navNext}
                   disabled={loading}
                   onClick={goNext}
+                  onMouseEnter={ensureNextPrefetch}
+                  onFocus={ensureNextPrefetch}
                 >
                   次の行 →
                 </button>
