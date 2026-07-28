@@ -26,13 +26,16 @@ export function isCredentialError(error: unknown): boolean {
 /**
  * Google API 由来の「権限不足」系エラーかどうか（403）。
  * 対象シートが未共有、または付与スコープ不足のときに発生する
- * "Insufficient Permission" / "The caller does not have permission" 等。
+ * "Insufficient Permission" / "The caller does not have permission" /
+ * "Request had insufficient authentication scopes" 等。
  * 別アカウントでの再ログインで解決し得るため、ログイン導線へ誘導する。
  */
 export function isPermissionError(error: unknown): boolean {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   return (
     message.includes("insufficient permission") ||
+    message.includes("insufficient authentication scopes") ||
+    message.includes("insufficient_scope") ||
     message.includes("permission_denied") ||
     message.includes("does not have permission") ||
     message.includes("forbidden")

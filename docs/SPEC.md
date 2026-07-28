@@ -234,7 +234,7 @@ UI の選択値（`ColumnMode`）は内部フラグへ次のように対応（`s
 - **サーバー側のトークン取得**: `getGoogleAccessToken`（`src/lib/google-session.ts`）は Cookie をデコードして使用。**期限切れ・期限間近のときはこの場で refresh** してから返す。
   - 理由: ルートハンドラ内の `auth()` による refresh はトークンを Cookie へ書き戻さないことがあり、古いトークンのまま Sheets API に渡ると `Invalid Credentials` になる。取得経路でも再取得することで確実に最新化する（セーフティネット）。
 - **資格情報エラー時の扱い**: `Invalid Credentials` / `invalid_grant` 等は `isCredentialError`（`src/lib/api-error.ts`）で検出し、`401` + 「再ログインしてください」に変換。`getBootstrap` は資格情報エラー（および `session.error`）時に **行き止まりのエラーではなくログイン画面（`LoginPanel`）** を表示する。
-- **権限不足エラー時の扱い**: `Insufficient Permission` / `The caller does not have permission` / `forbidden` 等は `isPermissionError` で検出し、`403` + 専用文言（`PERMISSION_MESSAGE`：「権限に問題が生じています。一度ログアウトし、再ログインをお試しください。解決しない場合はご連絡ください。」）に変換。`getBootstrap` はこれを **authRequired（`authMessage` 付き）** として扱い、`LoginPanel` ＋ 専用メッセージを表示する。原因はスコープ不足・共有設定・トークン等いずれもあり得るため文言では断定せず、再ログインへ誘導する。
+- **権限不足エラー時の扱い**: `Insufficient Permission` / `The caller does not have permission` / `Request had insufficient authentication scopes` / `forbidden` 等は `isPermissionError` で検出し、`403` + 専用文言（`PERMISSION_MESSAGE`：「権限に問題が生じています。一度ログアウトし、再ログインをお試しください。解決しない場合はご連絡ください。」）に変換。`getBootstrap` はこれを **authRequired（`authMessage` 付き）** として扱い、`LoginPanel` ＋ 専用メッセージを表示する。原因はスコープ不足・共有設定・トークン等いずれもあり得るため文言では断定せず、再ログインへ誘導する。
 - **ログアウト導線の常時表示**: ヘッダーのログアウトボタンは **サインイン中（`session.user.email` あり）なら `bootstrap` 取得が失敗（権限不足・500 等）しても必ず表示**する。これにより「エラーでログアウトできず再ログインも試せない」宙ぶらりんを防ぐ。`authRequired` 画面にもログアウトボタンを置き、別アカウントへ切り替えられるようにする。
 - **再ログインが必要なケース**: refresh トークンが無い/失効した場合（古い認可・連携解除など）。一度ログアウト→ログインすると、`access_type=offline` + `prompt=consent` により refresh トークンが再保存され、以降は自動更新される。
 
