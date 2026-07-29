@@ -11,6 +11,21 @@ export function hasSharedCache(): boolean {
   return Boolean(redisUrl && redisToken);
 }
 
+/**
+ * 共有キャッシュ（Redis/Upstash）が実際に到達可能かを確認する。
+ * `KV_REST_API_URL` 等が未設定なら configured=false（PING は送らない）。
+ * 設定済みでも認証情報が誤っている・ネットワーク不可の場合は reachable=false になる。
+ * 診断用途（`/api/cache`）のみで使う軽量チェック。
+ */
+export async function checkSharedCacheHealth(): Promise<{
+  configured: boolean;
+  reachable: boolean;
+}> {
+  if (!hasSharedCache()) return { configured: false, reachable: false };
+  const result = await command<string>(["PING"]);
+  return { configured: true, reachable: result === "PONG" };
+}
+
 export function sharedCacheKey(
   domain: "struct" | "nav" | "row" | "wiki",
   sheetId: string,

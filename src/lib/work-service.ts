@@ -61,6 +61,7 @@ import {
 } from "./store";
 import {
   acquireSharedLock,
+  checkSharedCacheHealth,
   releaseSharedLock,
   sharedCacheKey,
   sharedDelete,
@@ -785,11 +786,13 @@ export async function clearCacheByTarget(target: CacheTarget): Promise<void> {
   }
 }
 
-export function cacheStats(): {
+export async function cacheStats(): Promise<{
   indexRowsCached: number;
   dataRowsCached: number;
   wikiHistoryEntries: number;
-} {
+  /** Redis/Upstash 共有キャッシュの設定・到達可否（インスタンス間キャッシュ共有の有効性診断用）。 */
+  sharedCache: { configured: boolean; reachable: boolean };
+}> {
   let indexRowsCached = 0;
   let dataRowsCached = 0;
   let wikiHistoryEntries = 0;
@@ -799,5 +802,6 @@ export function cacheStats(): {
     dataRowsCached += s.dataRowsCached;
     wikiHistoryEntries += s.wikiHistoryEntries;
   }
-  return { indexRowsCached, dataRowsCached, wikiHistoryEntries };
+  const sharedCache = await checkSharedCacheHealth();
+  return { indexRowsCached, dataRowsCached, wikiHistoryEntries, sharedCache };
 }

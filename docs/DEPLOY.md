@@ -51,6 +51,20 @@ Upstash名で連携される場合は `UPSTASH_REDIS_REST_URL` /
 
 6. **Deploy**
 
+7. **共有キャッシュの動作確認**（KV設定後）
+
+デプロイ後、ブラウザ等で `https://<your-vercel-domain>/api/cache` を開く（GET）と、
+`sharedCache.configured` / `sharedCache.reachable` が確認できる。
+
+```json
+{ "indexRowsCached": 0, "dataRowsCached": 0, "wikiHistoryEntries": 0,
+  "sharedCache": { "configured": true, "reachable": true } }
+```
+
+- `configured: false` → 環境変数が読めていない（変数名の誤り・未Redeploy等）
+- `configured: true, reachable: false` → URL/トークンが誤っている、またはRedis側の障害
+- `reachable: true` になれば共有キャッシュは有効
+
 ## 3. 作業者への共有
 
 - Vercel の Production URL（例: `https://chambers-add-wiki.vercel.app`）を共有

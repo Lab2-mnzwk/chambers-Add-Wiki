@@ -15,12 +15,12 @@ export async function DELETE(request: NextRequest) {
       ? raw
       : "all") as CacheTarget;
     await clearCacheByTarget(target);
-    return NextResponse.json({ ok: true, target, stats: cacheStats() });
+    return NextResponse.json({ ok: true, target, stats: await cacheStats() });
   } catch (e) {
     return apiErrorResponse(e);
   }
 }
 
 export async function GET() {
-  return NextResponse.json(cacheStats());
+  return NextResponse.json(await cacheStats());
 }
