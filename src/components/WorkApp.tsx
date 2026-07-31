@@ -163,6 +163,7 @@ function rowQuery(
     lightBlueOnly: String(options.lightBlueOnly),
     fullEditMode: String(options.fullEditMode),
     showNamedTriplets: String(options.showNamedTriplets),
+    indexRows: String(options.indexRows),
   });
   // 鮮度が必須の読みだけキャッシュを使わない。
   if (fresh) params.set("fresh", "true");

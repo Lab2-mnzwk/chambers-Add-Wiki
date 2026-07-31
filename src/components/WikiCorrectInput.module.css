@@ -112,3 +112,11 @@
   color: var(--work-letter);
   opacity: 0.7;
 }
+
+.badgeLoading {
+  align-self: flex-start;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--work-letter);
+  opacity: 0.7;
+}

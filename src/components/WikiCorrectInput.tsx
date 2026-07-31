@@ -225,8 +225,10 @@ export function WikiCorrectInput({
           </ul>
         </div>
       )}
-      {tripletName.trim() && !loading && !open && (
-        !loaded ? (
+      {tripletName.trim() && !open && (
+        loading ? (
+          <span className={styles.badgeLoading}>候補を確認中…</span>
+        ) : !loaded ? (
           <button
             type="button"
             className={styles.badge}

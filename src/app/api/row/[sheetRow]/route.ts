@@ -1,6 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { apiErrorResponse } from "@/lib/api-error";
-import { getRow, getRowProbe } from "@/lib/work-service";
+import { DEFAULT_INDEX_ROWS } from "@/lib/config";
+import { getRow, getRowProbe, warmWikiHistory } from "@/lib/work-service";
 
 export async function GET(
   request: NextRequest,
@@ -27,6 +28,11 @@ export async function GET(
       request.nextUrl.searchParams.get("fresh") === "true";
     const background =
       request.nextUrl.searchParams.get("bg") === "true";
+    const indexRowsParam = Number(request.nextUrl.searchParams.get("indexRows"));
+    const indexRows =
+      Number.isFinite(indexRowsParam) && indexRowsParam > 0
+        ? indexRowsParam
+        : DEFAULT_INDEX_ROWS;
     const payload = await getRow(
       sheet,
       sheetRowNumber,
@@ -38,6 +44,14 @@ export async function GET(
       forceFresh,
       background
     );
+    // 正しいwiki 候補欄を開いたときに待たされないよう、レスポンス後に裏で温める。
+    if (sheet) {
+      after(() =>
+        warmWikiHistory(sheet, indexRows).catch((e) => {
+          console.warn("[wiki-history] warm failed", e);
+        })
+      );
+    }
     return NextResponse.json(payload);
   } catch (e) {
     return apiErrorResponse(e);

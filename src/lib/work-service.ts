@@ -320,6 +320,24 @@ export async function getWikiHistorySuggestions(
   return suggestWikiHistory(combined, name, wiki, query);
 }
 
+/**
+ * 正しいwiki 候補の履歴インデックスを事前に温める（行表示時の裏読み用）。
+ * 今開いている行のシートを優先して構築し、もう一方のシートは後回しにする。
+ * キャッシュ済みなら `ensureWikiHistory` が即返るため、既に温かい場合の追加コストは小さい。
+ */
+export async function warmWikiHistory(
+  primarySheetId: string,
+  indexRows: number
+): Promise<void> {
+  const primary = WORK_SHEETS.find((s) => s.id === primarySheetId);
+  const ordered = primary
+    ? [primary, ...WORK_SHEETS.filter((s) => s.id !== primarySheetId)]
+    : WORK_SHEETS;
+  for (const sheet of ordered) {
+    await ensureWikiHistory(sheet, indexRows);
+  }
+}
+
 export async function getBootstrap(): Promise<BootstrapPayload> {
   const oauth = isOAuthConfigured();
   const session = oauth ? await auth() : null;
